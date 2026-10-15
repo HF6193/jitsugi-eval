@@ -1,10 +1,12 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を上げる
-const VERSION = "v5";
+const VERSION = "v6";
 const CACHE = "jitsugi-eval-" + VERSION;
 const ASSETS = ["./", "index.html", "style.css", "app.js", "checklist.js", "manifest.webmanifest", "icon-180.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // ブラウザのHTTPキャッシュに残った古いファイルを取り込まないよう、必ずサーバーから取得する
+  const reqs = ASSETS.map((u) => new Request(u, { cache: "reload" }));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(reqs)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
