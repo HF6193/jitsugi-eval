@@ -13,8 +13,6 @@ const dlg = document.getElementById("dlg");
 function blankState() {
   return {
     teacher: "",
-    examTitle: "",
-    passLine: null,
     checklist: null, // null のときは checklist.js の既定を使う
     students: [], // { id, name }
     evals: {}, // studentId -> { checked: {itemId: true}, measures: {itemId: cm}, memo, status, updatedAt, finalizedAt, revised }
@@ -51,12 +49,28 @@ function hasChecklist() {
   return checklist().groups.length > 0;
 }
 
+// 試験名・合格点はチェックリストCSVで一括して決める（各教員は変更できない）
 function examTitle() {
-  return state.examTitle || checklist().title || "実技試験";
+  return checklist().title || "実技試験";
 }
 
 function passLine() {
-  return state.passLine ?? checklist().passLine ?? 60;
+  return checklist().passLine ?? 60;
+}
+
+// チェックリストの版：内容から計算する短い識別子（同じ内容なら同じ値になる）
+function checklistVersion(rows) {
+  const text = rows.map((r) => {
+    const a = [...r];
+    while (a.length && a[a.length - 1] === "") a.pop();
+    return a.join("\t");
+  }).join("\n");
+  let h = 0x811c9dc5;
+  for (const ch of text) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).toUpperCase().padStart(8, "0").slice(0, 6);
 }
 
 // 各項目に安定したIDを振る（g{群番号}-{項目番号}）
@@ -296,7 +310,7 @@ function renderHome() {
     if (rosterEdit) {
       const id = esc(s.id);
       return `
-      <div class="row edit ${s.absent ? "is-absent" : ""}">
+      <div class="row edit ${s.absent ? "is-absent" : ""}" data-st="${s.absent ? "absent" : st}">
         <span class="row-no">${i + 1}</span>
         <span class="row-id">${id}</span>
         <span class="row-name">${esc(s.name)}</span>
@@ -310,12 +324,12 @@ function renderHome() {
       </div>`;
     }
     return `
-      <button class="row ${s.absent ? "is-absent" : ""}" data-open="${esc(s.id)}">
+      <button class="row ${s.absent ? "is-absent" : ""}" data-st="${s.absent ? "absent" : st}" data-open="${esc(s.id)}">
         <span class="row-no">${i + 1}</span>
         <span class="row-id">${esc(s.id)}</span>
         <span class="row-name">${esc(s.name)}</span>
         <span class="row-status">${chip}</span>
-        <span class="row-score">${r ? r.score : "—"}</span>
+        <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? r.score : "—"}</span>
         <span class="row-pass">${r ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
       </button>`;
   }).join("");
@@ -345,6 +359,10 @@ function renderHome() {
         <button class="btn primary" data-act="export">結果をCSVで書き出す</button>
       </div>
       ${state.students.length ? `
+        ${n ? `<div class="progress" aria-label="評価の進み具合">
+          <div class="progress-bar"><span style="width:${n - absentCount ? (done / (n - absentCount)) * 100 : 0}%"></span></div>
+          <div class="progress-text"><b>${done}</b> / ${n - absentCount} 名 確定${absentCount ? `<span class="muted">（欠席 ${absentCount}）</span>` : ""}</div>
+        </div>` : ""}
         ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。</p>` : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
           <div class="row head ${rosterEdit ? "edit" : ""}">
@@ -553,9 +571,14 @@ function renderEval() {
   const sheet = (state.viewMode || "sheet") === "sheet";
   const reviewTag = (g) => (g.check && !state.checklist ? ` <span class="chip small warn">要確認</span>` : "");
 
+  // 区分（準備・説明、感染予防…）ごとに色を変える
+  const catIndex = {};
+  for (const g of cl.groups) if (!(g.category in catIndex)) catIndex[g.category] = Object.keys(catIndex).length % 6;
+  const critTag = (it) => (isCritical(it) ? `<span class="crit-tag">不合格</span>` : "");
+
   let lastCat = null;
   const groups = sheet ? `<div class="sheet">${cl.groups.map((g) => {
-    const catHead = g.category !== lastCat ? `<h3 class="cat">${esc(g.category)}</h3>` : "";
+    const catHead = g.category !== lastCat ? `<h3 class="cat" data-c="${catIndex[g.category]}">${esc(g.category)}</h3>` : "";
     lastCat = g.category;
     const d = r.byGroup[g.id];
     const row = (it, inline) => {
@@ -564,7 +587,7 @@ function renderEval() {
       return `
         <button class="srow ${inline ? "inline" : ""} ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}"
                 data-item="${it.id}" ${locked ? "disabled" : ""} aria-pressed="${on}">
-          <span class="sbox">${on ? "✓" : ""}</span><span class="slabel">${esc(it.label)}</span><span class="spt">${pt}</span>
+          <span class="sbox">${on ? "✓" : ""}</span><span class="slabel">${esc(it.label)}</span>${critTag(it)}<span class="spt">${pt}</span>
         </button>`;
     };
     // 短い項目（マスク・手袋など）が2つ以上続くところは横に並べる
@@ -574,16 +597,16 @@ function renderEval() {
       else items += isMeasure(run[0]) ? measureHTML(run[0], ev, locked) : row(run[0], false);
     }
     return `${catHead}
-      <section class="sg">
+      <section class="sg ${d ? "has-ded" : ""}" data-c="${catIndex[g.category]}">
         <div class="sg-head">
           <span class="sg-name">${esc(g.name)}${reviewTag(g)}</span>
-          <span class="sg-ded ${d ? "has" : ""}">減点 ${d}<span class="muted"> / 上限 ${g.max}</span></span>
+          <span class="sg-ded ${d ? "has" : ""}">${d ? `−${d}` : "減点 0"}<span class="muted"> / 上限 ${g.max}</span></span>
           ${imageButton(g)}
         </div>
         <div class="sg-items">${items}</div>
       </section>`;
   }).join("")}</div>` : cl.groups.map((g) => {
-    const catHead = g.category !== lastCat ? `<h3 class="cat">${esc(g.category)}</h3>` : "";
+    const catHead = g.category !== lastCat ? `<h3 class="cat" data-c="${catIndex[g.category]}">${esc(g.category)}</h3>` : "";
     lastCat = g.category;
     const items = g.items.map((it) => {
       if (isMeasure(it)) return measureHTML(it, ev, locked);
@@ -596,12 +619,12 @@ function renderEval() {
                 data-item="${it.id}" ${locked ? "disabled" : ""} aria-pressed="${on}">
           <span class="box">${on ? "✓" : ""}</span>
           <span class="label">${esc(it.label)}</span>
-          ${pt}
+          ${critTag(it)}${pt}
         </button>`;
     }).join("");
     const d = r.byGroup[g.id];
     return `${catHead}
-      <section class="group">
+      <section class="group ${d ? "has-ded" : ""}" data-c="${catIndex[g.category]}">
         <div class="group-head">
           <span class="group-name">${esc(g.name)}${reviewTag(g)} ${imageButton(g)}</span>
           <span class="group-ded ${d ? "has" : ""}">減点 ${d} <span class="muted">/ 上限 ${g.max}</span></span>
@@ -618,8 +641,9 @@ function renderEval() {
         <div class="who-name">${esc(s.name)}</div>
       </div>
       <div class="score ${r.pass ? "" : "is-fail"}">
-        <span class="score-v">${r.score}</span><span class="score-u">点</span>
-        <span class="verdict">${r.pass ? "合" : "否"}</span>
+        <div class="score-main"><span class="score-v">${r.score}</span><span class="score-u">点</span>
+        <span class="verdict">${r.pass ? "合格" : "不合格"}</span></div>
+        <div class="score-sub">減点 ${r.total}　／　合格 ${passLine()}点以上</div>
       </div>
       <div class="head-actions">
         <button class="btn small" data-act="view">${sheet ? "詳細表示" : "一覧表示"}</button>
@@ -735,7 +759,7 @@ async function exportResults() {
   const cl = checklist();
   const items = cl.groups.flatMap((g) => g.items.map((it) => ({ g, it })));
   const header = [
-    "試験名", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
+    "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
     ...cl.groups.map((g) => `【減点】${g.name}`),
     ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm）" : ""}`),
   ];
@@ -746,7 +770,7 @@ async function exportResults() {
     const r = scoreOf(ev);
     const evaluated = st !== "none" && st !== "absent";
     return [
-      examTitle(), state.teacher, s.id, s.name,
+      examTitle(), cl.version || "", state.teacher, s.id, s.name,
       { none: "未評価", draft: "未確定", final: "確定", absent: "欠席" }[st],
       evaluated ? r.score : "", evaluated ? (r.pass ? "合" : "否") : "", evaluated ? r.total : "",
       fmtDate(ev?.finalizedAt), ev?.revised || 0,
@@ -775,22 +799,25 @@ function renderSettings() {
     </header>
     <main class="settings">
       <section class="card form">
-        <h3>基本情報</h3>
+        <h3>評価者</h3>
         <label>評価者（教員名）<input id="s-teacher" value="${esc(state.teacher)}" autocomplete="off"></label>
-        <label>試験名<input id="s-title" value="${esc(state.examTitle)}" placeholder="${esc(cl.title)}" autocomplete="off"></label>
-        <label>合格点（以上）<input id="s-pass" type="number" inputmode="numeric" value="${esc(state.passLine ?? "")}" placeholder="${esc(cl.passLine ?? 60)}"></label>
         <button class="btn primary" data-act="save">保存</button>
       </section>
 
       <section class="card">
         <h3>チェックリスト</h3>
-        <p>${hasChecklist() ? `現在：<b>${esc(cl.title)}</b>（${cl.groups.length} 項目群・${nItems} チェック項目）${state.checklist ? "　※CSVから読み込み" : "　※アプリ内蔵"}` : `<b class="fail">未読み込み</b>`}</p>
+        ${hasChecklist() ? `
+          <table class="kv">
+            <tr><th>試験名</th><td>${esc(examTitle())}</td></tr>
+            <tr><th>合格点</th><td>${passLine()} 点以上</td></tr>
+            <tr><th>項目数</th><td>${cl.groups.length} 項目群・${nItems} チェック項目</td></tr>
+            <tr><th>版</th><td><b>${esc(cl.version || "—")}</b>　<span class="muted">（全教員で同じ表示になっているか確認してください）</span></td></tr>
+          </table>` : `<p><b class="fail">未読み込み</b></p>`}
         <div class="btns">
-          ${hasChecklist() ? `<button class="btn" data-act="cl-export">チェックリストをCSVで書き出す</button>` : ""}
           <button class="btn" data-act="cl-import">チェックリストCSVを読み込む</button>
           ${state.checklist ? `<button class="btn" data-act="cl-reset">${window.DEFAULT_CHECKLIST ? "内蔵のものに戻す" : "読み込みを解除"}</button>` : ""}
         </div>
-        <p class="muted">CSVの列：区分, 実施項目, 減点上限, チェック内容, 減点, 補足画像。減点は数値・「注意」・測定（例「測定 1以上=20 2以上=41」）のいずれか。評価データがある間は差し替えできません。</p>
+        <p class="muted">試験名・合格点はチェックリストCSVで決まります。評価データがある間は差し替えできません。</p>
       </section>
 
       <section class="card">
@@ -799,22 +826,6 @@ function renderSettings() {
           ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "buttons") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "buttons") === k}">${label}</button>`).join("")}
         </div>
         <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p>
-      </section>
-
-      <section class="card">
-        <h3>名簿</h3>
-        <div class="btns">
-          <button class="btn" data-act="roster-template">名簿テンプレートを書き出す</button>
-        </div>
-        <p class="muted">1列目 学籍番号、2列目 氏名。1行目の見出しはあってもなくても構いません。</p>
-      </section>
-
-      <section class="card">
-        <h3>バックアップ</h3>
-        <div class="btns">
-          <button class="btn" data-act="backup">全データをバックアップ（JSON）</button>
-          <button class="btn" data-act="restore">バックアップから復元</button>
-        </div>
       </section>
 
       <section class="card">
@@ -837,19 +848,8 @@ function renderSettings() {
   on("back", () => go("home"));
   on("save", () => {
     state.teacher = app.querySelector("#s-teacher").value.trim();
-    state.examTitle = app.querySelector("#s-title").value.trim();
-    const p = app.querySelector("#s-pass").value.trim();
-    state.passLine = p === "" ? null : Number(p);
     save();
     go("home");
-  });
-  on("cl-export", () => {
-    const rows = [["区分", "実施項目", "減点上限", "チェック内容", "減点", "補足画像"]];
-    for (const g of cl.groups) {
-      g.items.forEach((it, i) => rows.push([g.category, g.name, g.max, it.label, pointsText(it),
-        i === 0 && g.images ? g.images.map((x) => x.replace(/^img\//, "")).join("|") : ""]));
-    }
-    shareFile(`チェックリスト_${cl.title}.csv`, toCSV(rows), "text/csv");
   });
   on("cl-import", importChecklist);
   on("offline-check", () => checkOffline());
@@ -869,19 +869,6 @@ function renderSettings() {
     state.checklist = null;
     save();
     render();
-  });
-  on("roster-template", () => shareFile("名簿テンプレート.csv", toCSV([["学籍番号", "氏名"], ["2401001", "看護 花子"], ["2401002", "看護 太郎"]]), "text/csv"));
-  on("backup", () => shareFile(`実技評価バックアップ_${stamp()}.json`, JSON.stringify(state, null, 1), "application/json"));
-  on("restore", async () => {
-    const file = await pickFile(".json,application/json");
-    if (!file) return;
-    let data;
-    try { data = JSON.parse(await readTextFile(file)); } catch { return alert("バックアップファイルを読み込めませんでした。"); }
-    if (!data || !Array.isArray(data.students)) return alert("バックアップファイルの形式が正しくありません。");
-    if (!(await confirmDialog("復元", `<p>現在のデータを置き換えて、学生 ${data.students.length} 名分のデータを復元します。</p>`, "復元する", true))) return;
-    state = Object.assign(blankState(), data);
-    save();
-    go("home");
   });
   on("wipe", async () => {
     if (!(await confirmDialog("全データを消去", "<p>名簿・評価結果・設定をすべて消去します。<b>元に戻せません。</b><br>結果CSVの書き出しは済んでいますか？</p>", "消去に進む", true))) return;
@@ -911,11 +898,6 @@ function parsePoints(label, ptS) {
   return t !== "" && Number.isFinite(n) ? { label, points: n } : null;
 }
 
-function pointsText(it) {
-  if (isMeasure(it)) return "測定 " + it.measure.map((s) => `${s.min}以上=${s.points}`).join(" ");
-  return it.points;
-}
-
 async function importChecklist() {
   if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
   const file = await pickFile(".csv,text/csv,text/plain");
@@ -923,8 +905,17 @@ async function importChecklist() {
   const rows = parseCSV(await readTextFile(file)).filter((r) => r[0] !== "区分");
   const groups = [];
   const errors = [];
+  let title = file.name.replace(/\.csv$/i, "").replace(/^チェックリスト_/, "");
+  let pass = 60;
   rows.forEach((r, i) => {
     const [category, name, maxS, label, ptS = "", imgS = ""] = r;
+    // 「設定」行：試験名・合格点
+    if (category === "設定") {
+      if (name === "試験名" && maxS) title = maxS;
+      else if (name === "合格点" && Number.isFinite(Number(maxS)) && maxS !== "") pass = Number(maxS);
+      else errors.push(`${i + 2}行目`);
+      return;
+    }
     const max = Number(maxS);
     const item = parsePoints(label, ptS);
     if (!name || !label || !Number.isFinite(max) || !item) {
@@ -942,12 +933,13 @@ async function importChecklist() {
   });
   if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点（数値・注意・測定）, 補足画像 です。");
   if (!groups.length) return alert("項目を読み取れませんでした。");
-  const title = file.name.replace(/\.csv$/i, "").replace(/^チェックリスト_/, "");
+  const version = checklistVersion(rows);
   const ok = await confirmDialog("チェックリストの読み込み",
     `<p>「${esc(title)}」：${groups.length} 項目群・${groups.reduce((n, g) => n + g.items.length, 0)} チェック項目</p>
+     <p>合格点 <b>${pass}</b> 点以上　／　版 <b>${version}</b></p>
      <ul class="preview">${groups.map((g) => `<li>${esc(g.category)}／${esc(g.name)}（上限 ${g.max}）</li>`).join("")}</ul>`, "読み込む");
   if (!ok) return;
-  state.checklist = { title, passLine: 60, groups };
+  state.checklist = { title, passLine: pass, version, groups };
   save();
   render();
 }

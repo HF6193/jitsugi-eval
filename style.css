@@ -473,3 +473,92 @@ dialog:has(.figs) { width: min(900px, calc(100vw - 32px)); }
   .row.edit .row-ctl { grid-column: 1 / -1; justify-content: flex-start; }
   .row.head.edit .row-ctl { display: none; }
 }
+.kv { border-collapse: collapse; margin: 4px 0 12px; font-size: 15px; }
+.kv th { text-align: left; color: var(--muted); font-weight: 500; padding: 3px 16px 3px 0; white-space: nowrap; vertical-align: top; }
+.kv td { padding: 3px 0; }
+
+/* ===== 見やすさの調整（区分の色分け・減点の強調・進み具合） ===== */
+:root {
+  --c0: #2f6fb3; --c0-bg: #e7f0fb;
+  --c1: #0f8a7e; --c1-bg: #e1f4f1;
+  --c2: #7a4fc4; --c2-bg: #efe8fb;
+  --c3: #c26a0a; --c3-bg: #fcefdf;
+  --c4: #a33a7a; --c4-bg: #f9e7f1;
+  --c5: #4b5563; --c5-bg: #eceff3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c0: #7fb0ea; --c0-bg: #1c2a3c;
+    --c1: #5fc9bb; --c1-bg: #16302d;
+    --c2: #b39af0; --c2-bg: #2a2340;
+    --c3: #f0a75a; --c3-bg: #3a2a17;
+    --c4: #e58bc0; --c4-bg: #3a1d2f;
+    --c5: #a7b0bd; --c5-bg: #262d36;
+  }
+}
+[data-c="0"] { --cat: var(--c0); --cat-bg: var(--c0-bg); }
+[data-c="1"] { --cat: var(--c1); --cat-bg: var(--c1-bg); }
+[data-c="2"] { --cat: var(--c2); --cat-bg: var(--c2-bg); }
+[data-c="3"] { --cat: var(--c3); --cat-bg: var(--c3-bg); }
+[data-c="4"] { --cat: var(--c4); --cat-bg: var(--c4-bg); }
+[data-c="5"] { --cat: var(--c5); --cat-bg: var(--c5-bg); }
+
+/* 区分の帯 */
+h3.cat[data-c] {
+  margin: 20px 0 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border-left: 6px solid var(--cat);
+  background: var(--cat-bg);
+  color: var(--cat);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.sheet h3.cat[data-c]:first-child, main.eval > h3.cat[data-c]:first-child { margin-top: 0; }
+.sg[data-c], .group[data-c] { border-left: 5px solid var(--cat); }
+
+/* 減点のある項目群は左の欄を赤く */
+.sg.has-ded .sg-head { background: var(--on-bg); }
+.sg-ded.has { font-size: 15px; }
+.group.has-ded .group-head { background: var(--on-bg); }
+
+/* 1つで不合格になる項目 */
+.crit-tag {
+  flex: none;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--fail);
+  border: 1.5px solid var(--fail);
+  border-radius: 5px;
+  padding: 0 5px;
+  line-height: 1.5;
+}
+.srow.on .crit-tag, .item.on .crit-tag { background: var(--fail); color: #fff; }
+
+/* 点数の表示 */
+.score { flex-direction: column; align-items: flex-end; gap: 0; border: 2px solid currentColor; padding: 2px 12px 4px; }
+.score-main { display: flex; align-items: baseline; gap: 4px; }
+.score .verdict { font-size: 18px; margin-left: 8px; }
+.score-sub { font-size: 11.5px; font-weight: 600; opacity: .85; white-space: nowrap; }
+.who-name { font-size: 22px; }
+
+/* 一覧：進み具合と状態の色 */
+.progress { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
+.progress-bar { flex: 1; height: 10px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.progress-bar span { display: block; height: 100%; border-radius: 999px; background: var(--ok); }
+.progress-text { font-size: 14px; white-space: nowrap; }
+.progress-text b { font-size: 18px; color: var(--ok); }
+.row[data-st] { border-left: 5px solid transparent; }
+.row[data-st="draft"] { border-left-color: var(--warn); }
+.row[data-st="final"] { border-left-color: var(--ok); }
+.row[data-st="absent"] { border-left-color: var(--line); background: var(--bg); }
+.row-score.pass { color: var(--ok); }
+.row-score.fail { color: var(--fail); }
+.chip.ok, .chip.warn { font-weight: 700; }
+
+@media (max-width: 600px) {
+  .score { padding: 1px 10px 3px; }
+  .score-sub { font-size: 10.5px; }
+  .who-name { font-size: 19px; }
+}
