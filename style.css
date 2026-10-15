@@ -255,8 +255,7 @@ textarea {
   border-radius: 12px;
   padding: 12px;
 }
-.eval-actions { display: flex; justify-content: center; gap: 12px; margin: 24px 0 8px; }
-.eval-foot { text-align: center; margin: 32px 0 24px; }
+.eval-actions { display: flex; justify-content: center; gap: 12px; margin: 24px 0 32px; }
 
 /* 設定 */
 .card {
@@ -466,7 +465,7 @@ dialog:has(.figs) { width: min(900px, calc(100vw - 32px)); }
 /* 名簿の並べ替え・削除・欠席 */
 .chip.absent { background: var(--line); color: var(--muted); }
 .row.is-absent .row-name, .row.is-absent .row-id { color: var(--muted); text-decoration: line-through; }
-.row.edit { grid-template-columns: 36px 100px 1fr 70px 340px; cursor: default; }
+.row.edit { grid-template-columns: 36px 100px 1fr 70px 280px; cursor: default; }
 .row-ctl { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .row-ctl .btn { min-width: 44px; padding-left: 10px; padding-right: 10px; }
 @media (max-width: 600px) {

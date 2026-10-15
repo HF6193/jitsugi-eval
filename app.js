@@ -23,7 +23,7 @@ function blankState() {
 
 let state = load();
 let view = { name: "home", studentId: null };
-let rosterEdit = false; // 一覧の「並べ替え・削除」モード
+let rosterEdit = false; // 一覧の「並べ替え・欠席」モード
 
 function load() {
   try {
@@ -306,7 +306,6 @@ function renderHome() {
           <button class="btn small" data-move="down" data-sid="${id}" ${i === n - 1 ? "disabled" : ""} aria-label="下へ">↓</button>
           <button class="btn small" data-move="last" data-sid="${id}" ${i === n - 1 ? "disabled" : ""}>最後へ</button>
           <button class="btn small" data-absent="${id}">${s.absent ? "欠席を取消" : "欠席"}</button>
-          <button class="btn small danger-text" data-remove="${id}">削除</button>
         </span>
       </div>`;
     }
@@ -341,12 +340,12 @@ function renderHome() {
       <div class="toolbar">
         <button class="btn" data-act="import-roster">名簿CSVを読み込む</button>
         <button class="btn" data-act="add-student">学生を追加</button>
-        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・削除を終える" : "並べ替え・削除"}</button>` : ""}
+        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席を終える" : "並べ替え・欠席"}</button>` : ""}
         <span class="spacer"></span>
         <button class="btn primary" data-act="export">結果をCSVで書き出す</button>
       </div>
       ${state.students.length ? `
-        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」または「削除」にしてください。</p>` : ""}
+        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。</p>` : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
           <div class="row head ${rosterEdit ? "edit" : ""}">
             <span class="row-no">#</span><span class="row-id">学籍番号</span><span class="row-name">氏名</span>
@@ -384,7 +383,6 @@ function renderHome() {
     const s = state.students[at(b.dataset.absent)];
     s.absent = !s.absent;
   })));
-  app.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", () => removeStudent(b.dataset.remove)));
   const re = app.querySelector("[data-act=roster-edit]");
   if (re) re.onclick = () => { rosterEdit = !rosterEdit; renderHome(); };
   app.querySelector("[data-act=settings]").onclick = () => go("settings");
@@ -393,18 +391,6 @@ function renderHome() {
   app.querySelector("[data-act=export]").onclick = exportResults;
   const lc = app.querySelector("[data-act=load-checklist]");
   if (lc) lc.onclick = importChecklist;
-}
-
-async function removeStudent(id) {
-  const s = state.students.find((x) => x.id === id);
-  if (!s) return;
-  const st = getEvalIfAny(id)?.status;
-  const warn = st && st !== "none" ? `<p class="warn-text">この学生には評価データ（${st === "final" ? "確定済み" : "評価中"}）があります。削除すると元に戻せません。</p>` : "";
-  if (!(await confirmDialog("名簿から削除", `<p>${esc(s.id)}　${esc(s.name)} を名簿から削除します。</p>${warn}<p class="muted">記録として残す場合は「欠席」にしてください。</p>`, "削除する", true))) return;
-  state.students = state.students.filter((x) => x.id !== id);
-  delete state.evals[id];
-  save();
-  go("home");
 }
 
 function getEvalIfAny(id) {
@@ -654,9 +640,6 @@ function renderEval() {
              ${next ? `<button class="btn primary" data-act="next">次の学生へ ›</button>` : ""}`
           : `<button class="btn primary big" data-act="finalize">評価を確定する</button>`}
       </div>
-      <div class="eval-foot">
-        <button class="btn ghost small danger-text" data-act="remove">この学生を名簿から削除</button>
-      </div>
     </main>`;
 
   app.querySelectorAll("[data-item]").forEach((b) => b.addEventListener("click", () => {
@@ -713,7 +696,6 @@ function renderEval() {
     touch(ev);
     renderEval();
   });
-  on("remove", () => removeStudent(s.id));
 }
 
 async function finalize(s, ev) {
