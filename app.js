@@ -23,6 +23,7 @@ function blankState() {
 
 let state = load();
 let view = { name: "home", studentId: null };
+let rosterEdit = false; // 一覧の「並べ替え・削除」モード
 
 function load() {
   try {
@@ -283,13 +284,34 @@ function renderHome() {
       Safari の共有ボタン → 「ホーム画面に追加」。Safari で開いたまま使うと、データがホーム画面のアプリとは別に保存されます。
     </div>`;
 
+  const n = state.students.length;
+  const absentCount = state.students.filter((s) => s.absent).length;
   const rows = state.students.map((s, i) => {
     const ev = getEvalIfAny(s.id);
     const st = ev?.status || "none";
     const r = ev && st !== "none" ? scoreOf(ev) : null;
-    const chip = { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, final: `<span class="chip ok">確定</span>` }[st];
+    const chip = s.absent
+      ? `<span class="chip absent">欠席</span>`
+      : { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, final: `<span class="chip ok">確定</span>` }[st];
+    if (rosterEdit) {
+      const id = esc(s.id);
+      return `
+      <div class="row edit ${s.absent ? "is-absent" : ""}">
+        <span class="row-no">${i + 1}</span>
+        <span class="row-id">${id}</span>
+        <span class="row-name">${esc(s.name)}</span>
+        <span class="row-status">${chip}</span>
+        <span class="row-ctl">
+          <button class="btn small" data-move="up" data-sid="${id}" ${i === 0 ? "disabled" : ""} aria-label="上へ">↑</button>
+          <button class="btn small" data-move="down" data-sid="${id}" ${i === n - 1 ? "disabled" : ""} aria-label="下へ">↓</button>
+          <button class="btn small" data-move="last" data-sid="${id}" ${i === n - 1 ? "disabled" : ""}>最後へ</button>
+          <button class="btn small" data-absent="${id}">${s.absent ? "欠席を取消" : "欠席"}</button>
+          <button class="btn small danger-text" data-remove="${id}">削除</button>
+        </span>
+      </div>`;
+    }
     return `
-      <button class="row" data-open="${esc(s.id)}">
+      <button class="row ${s.absent ? "is-absent" : ""}" data-open="${esc(s.id)}">
         <span class="row-no">${i + 1}</span>
         <span class="row-id">${esc(s.id)}</span>
         <span class="row-name">${esc(s.name)}</span>
@@ -304,7 +326,7 @@ function renderHome() {
     <header class="top">
       <div>
         <div class="title">${esc(examTitle())}</div>
-        <div class="sub">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／　確定 ${done} / ${state.students.length} 名　／　合格 ${passLine()} 点以上</div>
+        <div class="sub">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／　確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}　／　合格 ${passLine()} 点以上</div>
         <div class="sub" data-offline>${offlineBadge()}</div>
       </div>
       <button class="btn" data-act="settings">設定</button>
@@ -319,14 +341,16 @@ function renderHome() {
       <div class="toolbar">
         <button class="btn" data-act="import-roster">名簿CSVを読み込む</button>
         <button class="btn" data-act="add-student">学生を追加</button>
+        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・削除を終える" : "並べ替え・削除"}</button>` : ""}
         <span class="spacer"></span>
         <button class="btn primary" data-act="export">結果をCSVで書き出す</button>
       </div>
       ${state.students.length ? `
-        <div class="list">
-          <div class="row head">
+        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」または「削除」にしてください。</p>` : ""}
+        <div class="list ${rosterEdit ? "editing" : ""}">
+          <div class="row head ${rosterEdit ? "edit" : ""}">
             <span class="row-no">#</span><span class="row-id">学籍番号</span><span class="row-name">氏名</span>
-            <span class="row-status">状態</span><span class="row-score">得点</span><span class="row-pass">合否</span>
+            <span class="row-status">状態</span>${rosterEdit ? `<span class="row-ctl">操作</span>` : `<span class="row-score">得点</span><span class="row-pass">合否</span>`}
           </div>
           ${rows}
         </div>` : `
@@ -337,16 +361,50 @@ function renderHome() {
       ${cl.groups.some((g) => g.check) && !state.checklist ? `<p class="note">※ 既定のチェックリストには配点を推定した項目（要確認）が含まれています。</p>` : ""}
     </main>`;
 
-  app.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => {
+  app.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", async () => {
     if (!hasChecklist()) return alert("先にチェックリストCSVを読み込んでください。");
+    const st = state.students.find((x) => x.id === b.dataset.open);
+    if (st?.absent) {
+      if (!(await confirmDialog("欠席の学生", `<p>${esc(st.name)} は欠席になっています。欠席を取り消して評価しますか？</p>`, "取り消して評価する"))) return;
+      st.absent = false;
+      save();
+    }
     go("eval", b.dataset.open);
   }));
+  const keepScroll = (fn) => { const y = window.scrollY; fn(); save(); renderHome(); window.scrollTo(0, y); };
+  const at = (id) => state.students.findIndex((x) => x.id === id);
+  app.querySelectorAll("[data-move]").forEach((b) => b.addEventListener("click", () => keepScroll(() => {
+    const i = at(b.dataset.sid);
+    const list = state.students;
+    const [s] = list.splice(i, 1);
+    const to = { up: i - 1, down: i + 1, last: list.length }[b.dataset.move];
+    list.splice(Math.max(0, Math.min(to, list.length)), 0, s);
+  })));
+  app.querySelectorAll("[data-absent]").forEach((b) => b.addEventListener("click", () => keepScroll(() => {
+    const s = state.students[at(b.dataset.absent)];
+    s.absent = !s.absent;
+  })));
+  app.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", () => removeStudent(b.dataset.remove)));
+  const re = app.querySelector("[data-act=roster-edit]");
+  if (re) re.onclick = () => { rosterEdit = !rosterEdit; renderHome(); };
   app.querySelector("[data-act=settings]").onclick = () => go("settings");
   app.querySelector("[data-act=import-roster]").onclick = importRoster;
   app.querySelector("[data-act=add-student]").onclick = addStudent;
   app.querySelector("[data-act=export]").onclick = exportResults;
   const lc = app.querySelector("[data-act=load-checklist]");
   if (lc) lc.onclick = importChecklist;
+}
+
+async function removeStudent(id) {
+  const s = state.students.find((x) => x.id === id);
+  if (!s) return;
+  const st = getEvalIfAny(id)?.status;
+  const warn = st && st !== "none" ? `<p class="warn-text">この学生には評価データ（${st === "final" ? "確定済み" : "評価中"}）があります。削除すると元に戻せません。</p>` : "";
+  if (!(await confirmDialog("名簿から削除", `<p>${esc(s.id)}　${esc(s.name)} を名簿から削除します。</p>${warn}<p class="muted">記録として残す場合は「欠席」にしてください。</p>`, "削除する", true))) return;
+  state.students = state.students.filter((x) => x.id !== id);
+  delete state.evals[id];
+  save();
+  go("home");
 }
 
 function getEvalIfAny(id) {
@@ -504,7 +562,7 @@ function renderEval() {
   const locked = ev.status === "final";
   const r = scoreOf(ev);
   const idx = state.students.indexOf(s);
-  const next = state.students[idx + 1];
+  const next = state.students.slice(idx + 1).find((x) => !x.absent);
 
   const sheet = (state.viewMode || "sheet") === "sheet";
   const reviewTag = (g) => (g.check && !state.checklist ? ` <span class="chip small warn">要確認</span>` : "");
@@ -655,13 +713,7 @@ function renderEval() {
     touch(ev);
     renderEval();
   });
-  on("remove", async () => {
-    if (!(await confirmDialog("名簿から削除", `<p>${esc(s.id)} ${esc(s.name)} を名簿から削除します。この学生の評価データも消えます。</p>`, "削除する", true))) return;
-    state.students = state.students.filter((x) => x.id !== s.id);
-    delete state.evals[s.id];
-    save();
-    go("home");
-  });
+  on("remove", () => removeStudent(s.id));
 }
 
 async function finalize(s, ev) {
@@ -691,7 +743,7 @@ async function exportResults() {
     alert("先に「設定」で評価者（教員名）を入力してください。");
     return go("settings");
   }
-  const notFinal = state.students.filter((s) => getEvalIfAny(s.id)?.status !== "final");
+  const notFinal = state.students.filter((s) => !s.absent && getEvalIfAny(s.id)?.status !== "final");
   if (notFinal.length) {
     const ok = await confirmDialog("未確定の学生がいます",
       `<p>次の ${notFinal.length} 名は確定していません。このまま書き出しますか？（状態列に「未評価」または「未確定」と記録されます）</p>
@@ -706,13 +758,14 @@ async function exportResults() {
     ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm）" : ""}`),
   ];
   const rows = state.students.map((s) => {
-    const ev = getEvalIfAny(s.id);
-    const st = ev?.status || "none";
+    // 欠席の学生は、途中まで入力があっても結果を出さない
+    const ev = s.absent ? null : getEvalIfAny(s.id);
+    const st = s.absent ? "absent" : ev?.status || "none";
     const r = scoreOf(ev);
-    const evaluated = st !== "none";
+    const evaluated = st !== "none" && st !== "absent";
     return [
       examTitle(), state.teacher, s.id, s.name,
-      { none: "未評価", draft: "未確定", final: "確定" }[st],
+      { none: "未評価", draft: "未確定", final: "確定", absent: "欠席" }[st],
       evaluated ? r.score : "", evaluated ? (r.pass ? "合" : "否") : "", evaluated ? r.total : "",
       fmtDate(ev?.finalizedAt), ev?.revised || 0,
       r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "",

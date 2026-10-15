@@ -462,3 +462,15 @@ dialog:has(.figs) { width: min(900px, calc(100vw - 32px)); }
   .score-v { font-size: 26px; }
   .verdict { font-size: 18px; margin-left: 6px; }
 }
+
+/* 名簿の並べ替え・削除・欠席 */
+.chip.absent { background: var(--line); color: var(--muted); }
+.row.is-absent .row-name, .row.is-absent .row-id { color: var(--muted); text-decoration: line-through; }
+.row.edit { grid-template-columns: 36px 100px 1fr 70px 340px; cursor: default; }
+.row-ctl { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.row-ctl .btn { min-width: 44px; padding-left: 10px; padding-right: 10px; }
+@media (max-width: 600px) {
+  .row.edit { grid-template-columns: 1fr 70px; }
+  .row.edit .row-ctl { grid-column: 1 / -1; justify-content: flex-start; }
+  .row.head.edit .row-ctl { display: none; }
+}
