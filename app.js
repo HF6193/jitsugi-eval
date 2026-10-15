@@ -17,13 +17,12 @@ function blankState() {
     passLine: null,
     checklist: null, // null のときは checklist.js の既定を使う
     students: [], // { id, name }
-    evals: {}, // studentId -> { checked: {itemId: true}, memo, status, updatedAt, finalizedAt, revised, timerMs, timerStartedAt }
+    evals: {}, // studentId -> { checked: {itemId: true}, measures: {itemId: cm}, memo, status, updatedAt, finalizedAt, revised }
   };
 }
 
 let state = load();
 let view = { name: "home", studentId: null };
-let timerTick = null;
 
 function load() {
   try {
@@ -140,7 +139,7 @@ function scoreOf(ev) {
 
 function getEval(id) {
   if (!state.evals[id]) {
-    state.evals[id] = { checked: {}, measures: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0, timerMs: 0, timerStartedAt: null };
+    state.evals[id] = { checked: {}, measures: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0 };
   }
   return state.evals[id];
 }
@@ -157,11 +156,6 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function fmtTime(ms) {
-  const s = Math.floor(ms / 1000);
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
 function fmtDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -173,10 +167,6 @@ function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
-}
-
-function timerMs(ev) {
-  return ev.timerMs + (ev.timerStartedAt ? Date.now() - ev.timerStartedAt : 0);
 }
 
 function isStandalone() {
@@ -285,7 +275,6 @@ function confirmDialog(title, body, okLabel = "OK", danger = false) {
 // ---------- 画面: ホーム ----------
 
 function renderHome() {
-  stopTick();
   const cl = checklist();
   const done = state.students.filter((s) => getEvalIfAny(s.id)?.status === "final").length;
   const banner = isStandalone() ? "" : `
@@ -557,18 +546,12 @@ function renderEval() {
       </section>`;
   }).join("");
 
-  const running = !!ev.timerStartedAt;
   app.innerHTML = `
     <header class="top eval-top">
       <button class="btn" data-act="back">‹ 一覧</button>
       <div class="who">
         <div class="who-id">${esc(s.id)}</div>
         <div class="who-name">${esc(s.name)}</div>
-      </div>
-      <div class="timer ${running ? "running" : ""}">
-        <span id="timer-v">${fmtTime(timerMs(ev))}</span>
-        <button class="btn small" data-act="timer" ${locked ? "disabled" : ""}>${running ? "停止" : "開始"}</button>
-        <button class="btn small ghost" data-act="timer-reset" ${locked || running ? "disabled" : ""}>リセット</button>
       </div>
       <div class="score ${r.pass ? "" : "is-fail"}">
         <span class="score-v">${r.score}</span><span class="score-u">点</span>
@@ -639,13 +622,6 @@ function renderEval() {
   const on = (act, fn) => app.querySelectorAll(`[data-act=${act}]`).forEach((el) => (el.onclick = fn));
   on("back", () => go("home"));
   on("next", () => go("eval", next.id));
-  on("timer", () => {
-    if (ev.timerStartedAt) { ev.timerMs = timerMs(ev); ev.timerStartedAt = null; }
-    else ev.timerStartedAt = Date.now();
-    touch(ev);
-    renderEval();
-  });
-  on("timer-reset", () => { ev.timerMs = 0; save(); renderEval(); });
   on("finalize", () => finalize(s, ev));
   on("view", () => {
     state.viewMode = sheet ? "detail" : "sheet";
@@ -666,8 +642,6 @@ function renderEval() {
     save();
     go("home");
   });
-
-  startTick(ev);
 }
 
 async function finalize(s, ev) {
@@ -676,35 +650,17 @@ async function finalize(s, ev) {
     <div class="sum">
       <div><span class="muted">学生</span>　${esc(s.id)}　${esc(s.name)}</div>
       <div class="sum-score ${r.pass ? "" : "is-fail"}">${r.score} 点　${r.pass ? "合格" : "不合格"}</div>
-      <div><span class="muted">減点合計</span>　${r.total} 点　／　<span class="muted">所要時間</span>　${fmtTime(timerMs(ev))}</div>
+      <div><span class="muted">減点合計</span>　${r.total} 点</div>
       ${r.deductions.length ? `<p class="muted">減点項目</p><ul>${r.deductions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : `<p>減点項目なし</p>`}
       ${r.cautions.length ? `<p class="muted">注意</p><ul>${r.cautions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
       ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合は 0 を入力）</p>` : ""}
     </div>`, "確定する");
   if (!ok) return;
-  if (ev.timerStartedAt) { ev.timerMs = timerMs(ev); ev.timerStartedAt = null; }
   ev.status = "final";
   ev.finalizedAt = new Date().toISOString();
   touch(ev);
   renderEval();
   window.scrollTo(0, 0);
-}
-
-function startTick(ev) {
-  stopTick();
-  if (!ev.timerStartedAt) return;
-  timerTick = setInterval(() => {
-    const el = document.getElementById("timer-v");
-    if (!el) return stopTick();
-    const ms = timerMs(ev);
-    el.textContent = fmtTime(ms);
-    el.parentElement.classList.toggle("over", ms >= 15 * 60 * 1000);
-  }, 500);
-}
-
-function stopTick() {
-  if (timerTick) clearInterval(timerTick);
-  timerTick = null;
 }
 
 // ---------- 書き出し ----------
@@ -725,7 +681,7 @@ async function exportResults() {
   const cl = checklist();
   const items = cl.groups.flatMap((g) => g.items.map((it) => ({ g, it })));
   const header = [
-    "試験名", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "所要時間", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
+    "試験名", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
     ...cl.groups.map((g) => `【減点】${g.name}`),
     ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm）" : ""}`),
   ];
@@ -738,7 +694,7 @@ async function exportResults() {
       examTitle(), state.teacher, s.id, s.name,
       { none: "未評価", draft: "未確定", final: "確定" }[st],
       evaluated ? r.score : "", evaluated ? (r.pass ? "合" : "否") : "", evaluated ? r.total : "",
-      ev ? fmtTime(timerMs(ev)) : "", fmtDate(ev?.finalizedAt), ev?.revised || 0,
+      fmtDate(ev?.finalizedAt), ev?.revised || 0,
       r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "",
       ...cl.groups.map((g) => (evaluated ? r.byGroup[g.id] : "")),
       ...items.map(({ it }) => {
@@ -754,7 +710,6 @@ async function exportResults() {
 // ---------- 画面: 設定 ----------
 
 function renderSettings() {
-  stopTick();
   const cl = checklist();
   const nItems = cl.groups.reduce((n, g) => n + g.items.length, 0);
   app.innerHTML = `
