@@ -90,10 +90,6 @@ function measureGuide(it) {
   return it.measure.map((s) => `${s.min}cm以上 −${s.points}`).join("／");
 }
 
-function fmtCm(v) {
-  return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
 function maxPoints(it) {
   if (isMeasure(it)) return Math.max(0, ...it.measure.map((s) => s.points));
   return typeof it.points === "number" ? it.points : 0;
@@ -123,7 +119,7 @@ function scoreOf(ev) {
         const v = measures[it.id];
         if (v == null) { unmeasured.push(it.label); continue; }
         const p = measureDeduction(it, v);
-        if (p) { sum += p; labels.push(`${it.label} ${fmtCm(v)}cm(−${p})`); }
+        if (p) { sum += p; labels.push(`${it.label} ${v.toFixed(1)}cm(−${p})`); }
         continue;
       }
       if (!checked[it.id]) continue;
@@ -425,9 +421,10 @@ const MEASURE_STYLES = {
   keypad: "テンキー入力",
 };
 
+// 0.1cm刻みの値の一覧（0〜max）
 function cmRange(max) {
   const a = [];
-  for (let v = 0; v <= max + 1e-9; v += 0.5) a.push(Math.round(v * 10) / 10);
+  for (let i = 0; i <= max * 10; i++) a.push(i / 10);
   return a;
 }
 
@@ -441,26 +438,38 @@ function measureHTML(it, ev, locked) {
   if (style === "select") {
     ctl = `<select class="msel" data-mselect="${it.id}" ${dis}>
       <option value="" ${has ? "" : "selected"}>未測定</option>
-      ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${fmtCm(x)} cm</option>`).join("")}
+      ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${x.toFixed(1)} cm</option>`).join("")}
     </select>`;
   } else if (style === "stepper") {
-    ctl = `<button class="btn mstep" data-mid="${it.id}" data-mstep="-0.5" ${dis}>−0.5</button>
-      <span class="mnow">${has ? `${fmtCm(v)} cm` : "未測定"}</span>
-      <button class="btn mstep" data-mid="${it.id}" data-mstep="0.5" ${dis}>＋0.5</button>
+    ctl = `<button class="btn mstep" data-mid="${it.id}" data-mstep="-1" ${dis}>−1</button>
+      <button class="btn mstep" data-mid="${it.id}" data-mstep="-0.1" ${dis}>−0.1</button>
+      <span class="mnow">${has ? `${v.toFixed(1)} cm` : "未測定"}</span>
+      <button class="btn mstep" data-mid="${it.id}" data-mstep="0.1" ${dis}>＋0.1</button>
+      <button class="btn mstep" data-mid="${it.id}" data-mstep="1" ${dis}>＋1</button>
       <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   } else if (style === "keypad") {
     ctl = `<input class="minp" type="number" inputmode="decimal" min="0" step="0.1" placeholder="未測定"
-        data-minput="${it.id}" value="${has ? v : ""}" ${dis}> <span>cm</span>
+        data-minput="${it.id}" value="${has ? v.toFixed(1) : ""}" ${dis}> <span>cm</span>
       <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   } else {
-    ctl = cmRange(5).map((x) => `<button class="btn mbtn ${has && x === v ? "sel" : ""}" data-mid="${it.id}" data-mv="${x}" ${dis}>${fmtCm(x)}</button>`).join("")
-      + `<button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
+    // 整数の部分と小数の部分を別々のボタンで選ぶ（例：「2」→「.5」で 2.5cm）
+    const ip = has ? Math.floor(v + 1e-9) : null;
+    const dp = has ? Math.round((v - ip) * 10) : null;
+    const intBtns = [...Array(10).keys()].map((n) =>
+      `<button class="btn mbtn ${ip === n ? "sel" : ""}" data-mid="${it.id}" data-mv="${n + (dp ?? 0) / 10}" ${dis}>${n}</button>`).join("");
+    const decBtns = [...Array(10).keys()].map((d) =>
+      `<button class="btn mbtn dec ${dp === d ? "sel" : ""}" data-mid="${it.id}" data-mv="${(ip ?? 0) + d / 10}" ${dis}>.${d}</button>`).join("");
+    ctl = `<div class="mpad">
+        <div class="mpad-row"><span class="mpad-l">cm</span>${intBtns}</div>
+        <div class="mpad-row"><span class="mpad-l">小数</span>${decBtns}</div>
+      </div>
+      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   }
   return `
     <div class="mrow ${has ? (p ? "on" : "zero") : "unset"} ${isCritical(it) ? "is-critical" : ""}">
       <div class="mhead">
         <span class="mlabel">${esc(it.label)}</span>
-        <span class="mval">${has ? `${fmtCm(v)} cm` : "未測定"}</span>
+        <span class="mval">${has ? `${v.toFixed(1)} cm` : "未測定"}</span>
         <span class="spt">${has ? (p ? `−${p}` : "0") : "—"}</span>
       </div>
       <div class="mguide">${esc(measureGuide(it))}</div>
