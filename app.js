@@ -407,16 +407,16 @@ function renderEval() {
       const on = !!ev.checked[it.id];
       const pt = isCaution(it) ? "注意" : `−${it.points}`;
       return `
-        <button class="tag ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}"
+        <button class="srow ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}"
                 data-item="${it.id}" ${locked ? "disabled" : ""} aria-pressed="${on}">
-          <span class="tag-label">${esc(it.label)}</span><span class="tag-pt">${pt}</span>
+          <span class="sbox">${on ? "✓" : ""}</span><span class="slabel">${esc(it.label)}</span><span class="spt">${pt}</span>
         </button>`;
     }).join("");
     return `${catHead}
       <section class="sg">
         <div class="sg-head">
           <span class="sg-name">${esc(g.name)}${reviewTag(g)}</span>
-          <span class="sg-ded ${d ? "has" : ""}">${d ? `−${d}` : "0"}<span class="muted"> / ${g.max}</span></span>
+          <span class="sg-ded ${d ? "has" : ""}">減点 ${d}<span class="muted"> / 上限 ${g.max}</span></span>
         </div>
         <div class="sg-items">${items}</div>
       </section>`;
