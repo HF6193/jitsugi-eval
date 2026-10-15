@@ -364,3 +364,4 @@ main.eval.is-sheet { max-width: none; padding: 10px 12px; }
 .is-sheet > h3.cat { max-width: 920px; margin-left: auto; margin-right: auto; }
 .banner.need { margin: 0 0 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .banner.need .btn { margin-left: auto; }
+.btns .btn { white-space: normal; text-align: left; }
