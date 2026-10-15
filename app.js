@@ -287,6 +287,7 @@ function renderHome() {
       <div>
         <div class="title">${esc(examTitle())}</div>
         <div class="sub">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／　確定 ${done} / ${state.students.length} 名　／　合格 ${passLine()} 点以上</div>
+        <div class="sub" data-offline>${offlineBadge()}</div>
       </div>
       <button class="btn" data-act="settings">設定</button>
     </header>
@@ -659,6 +660,13 @@ function renderSettings() {
       </section>
 
       <section class="card">
+        <h3>オフライン動作</h3>
+        <p data-offline>${offlineBadge(true)}</p>
+        <p class="muted">「オフライン準備完了」と表示されてから機内モードにしてください。表示されない場合は、Wi-Fiにつないだままアプリを開き直してください。</p>
+        <button class="btn" data-act="offline-check">再確認</button>
+      </section>
+
+      <section class="card">
         <h3>データの消去</h3>
         <p class="muted">試験後、結果CSVを書き出して集約が済んだら、この端末から成績データを消去してください。</p>
         <button class="btn danger" data-act="wipe">この端末の全データを消去</button>
@@ -683,6 +691,7 @@ function renderSettings() {
     shareFile(`チェックリスト_${cl.title}.csv`, toCSV(rows), "text/csv");
   });
   on("cl-import", importChecklist);
+  on("offline-check", () => checkOffline());
   on("cl-reset", async () => {
     if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
     if (!(await confirmDialog("チェックリストの解除", "<p>読み込んだチェックリストを解除します。</p>"))) return;
@@ -750,6 +759,53 @@ async function importChecklist() {
   render();
 }
 
+// ---------- オフライン準備の状態 ----------
+// ホーム画面のアプリはSafariとは別の保存領域を持つため、アプリ側で準備が終わったかを画面に出す
+
+const OFFLINE_FILES = ["index.html", "app.js", "style.css", "checklist.js"];
+let offline = { state: "checking", detail: "" }; // checking | pending | ready | error | unsupported
+let swError = null;
+let offlineTimer = null;
+
+function offlineBadge(long = false) {
+  const d = offline.detail ? `（${esc(offline.detail)}）` : "";
+  switch (offline.state) {
+    case "ready": return `<span class="chip ok">✓ オフライン準備完了</span>`;
+    case "pending": return `<span class="chip warn">オフライン準備中…</span>${long ? ` ネットにつないだままお待ちください${d}` : ""}`;
+    case "error": return `<span class="chip err">オフライン準備エラー</span>${long ? ` ${d}` : ""}`;
+    case "unsupported": return `<span class="chip">オフライン非対応</span>${long ? ` ${d}` : ""}`;
+    default: return `<span class="chip">オフライン準備を確認中…</span>`;
+  }
+}
+
+async function checkOffline() {
+  clearTimeout(offlineTimer);
+  let next;
+  try {
+    if (location.protocol === "file:" || !("serviceWorker" in navigator) || !window.caches) {
+      next = { state: "unsupported", detail: "この環境ではオフライン機能を使えません" };
+    } else if (swError) {
+      next = { state: "error", detail: swError };
+    } else {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const missing = [];
+      for (const f of OFFLINE_FILES) {
+        if (!(await caches.match(new URL(f, location.href).href, { ignoreSearch: true }))) missing.push(f);
+      }
+      if (reg && reg.active && !missing.length) next = { state: "ready", detail: "" };
+      else next = { state: "pending", detail: !reg ? "登録待ち" : !reg.active ? "取り込み中" : `未保存：${missing.join("、")}` };
+    }
+  } catch (e) {
+    next = { state: "error", detail: `${e.name}: ${e.message}` };
+  }
+  offline = next;
+  // 入力中の欄を消さないよう、表示部分だけ差し替える
+  document.querySelectorAll("[data-offline]").forEach((el) => {
+    el.innerHTML = offlineBadge(el.tagName === "P");
+  });
+  if (offline.state === "pending" || offline.state === "checking") offlineTimer = setTimeout(checkOffline, 1500);
+}
+
 // ---------- ルーティング ----------
 
 function go(name, studentId = null) {
@@ -772,5 +828,10 @@ render();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 if ("serviceWorker" in navigator && location.protocol !== "file:") {
-  navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW", e));
+  navigator.serviceWorker.register("sw.js")
+    .then(() => navigator.serviceWorker.ready)
+    .then(() => checkOffline())
+    .catch((e) => { swError = `${e.name}: ${e.message}`; checkOffline(); });
+  navigator.serviceWorker.addEventListener("controllerchange", () => checkOffline());
 }
+checkOffline();

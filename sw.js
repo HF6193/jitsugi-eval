@@ -1,5 +1,5 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を上げる
-const VERSION = "v6";
+const VERSION = "v7";
 const CACHE = "jitsugi-eval-" + VERSION;
 const ASSETS = ["./", "index.html", "style.css", "app.js", "checklist.js", "manifest.webmanifest", "icon-180.png", "icon-512.png"];
 
@@ -18,7 +18,15 @@ self.addEventListener("activate", (e) => {
 });
 
 // キャッシュ優先（ネットがなくても起動できる）
+// ページを開く要求は、URLの違い（/ と /index.html など）に関係なく保存済みの index.html を返す
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
-  e.respondWith(caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || fetch(e.request)));
+  e.respondWith((async () => {
+    if (e.request.mode === "navigate") {
+      const page = await caches.match("index.html");
+      if (page) return page;
+    }
+    const hit = await caches.match(e.request, { ignoreSearch: true });
+    return hit || fetch(e.request);
+  })());
 });

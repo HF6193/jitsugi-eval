@@ -85,6 +85,7 @@ button { font: inherit; color: inherit; }
 }
 .chip.ok { background: var(--ok-bg); color: var(--ok); }
 .chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.err { background: var(--on-bg); color: var(--fail); }
 .chip.small { font-size: 12px; padding: 1px 8px; vertical-align: 2px; }
 
 .banner {
