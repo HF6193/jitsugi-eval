@@ -465,10 +465,13 @@ function renderEval() {
       </div>
       <div class="head-actions">
         <button class="btn small" data-act="view">${sheet ? "詳細表示" : "一覧表示"}</button>
-        ${locked ? "" : `<button class="btn small primary" data-act="finalize-top">確定</button>`}
+        ${locked
+          ? `<button class="btn small" data-act="unlock">修正</button>
+             ${next ? `<button class="btn small primary" data-act="next">次の学生 ›</button>` : ""}`
+          : `<button class="btn small primary" data-act="finalize">確定</button>`}
       </div>
     </header>
-    ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには画面下の「修正する」を押してください。</div>` : ""}
+    ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには「修正」を押してください。</div>` : ""}
     <main class="eval ${sheet ? "is-sheet" : ""}">
       ${groups}
       <h3 class="cat">メモ</h3>
@@ -496,7 +499,7 @@ function renderEval() {
   const memo = app.querySelector("#memo");
   memo.addEventListener("input", () => { ev.memo = memo.value; touch(ev); });
 
-  const on = (act, fn) => { const el = app.querySelector(`[data-act=${act}]`); if (el) el.onclick = fn; };
+  const on = (act, fn) => app.querySelectorAll(`[data-act=${act}]`).forEach((el) => (el.onclick = fn));
   on("back", () => go("home"));
   on("next", () => go("eval", next.id));
   on("timer", () => {
@@ -507,7 +510,6 @@ function renderEval() {
   });
   on("timer-reset", () => { ev.timerMs = 0; save(); renderEval(); });
   on("finalize", () => finalize(s, ev));
-  on("finalize-top", () => finalize(s, ev));
   on("view", () => {
     state.viewMode = sheet ? "detail" : "sheet";
     save();
@@ -578,7 +580,7 @@ async function exportResults() {
   const notFinal = state.students.filter((s) => getEvalIfAny(s.id)?.status !== "final");
   if (notFinal.length) {
     const ok = await confirmDialog("未確定の学生がいます",
-      `<p>次の ${notFinal.length} 名は確定していません。このまま書き出しますか？（状態列に「未確定」と記録されます）</p>
+      `<p>次の ${notFinal.length} 名は確定していません。このまま書き出しますか？（状態列に「未評価」または「未確定」と記録されます）</p>
        <ul class="preview">${notFinal.map((s) => `<li>${esc(s.id)}　${esc(s.name)}</li>`).join("")}</ul>`, "書き出す");
     if (!ok) return;
   }
