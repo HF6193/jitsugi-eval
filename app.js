@@ -72,12 +72,36 @@ function withIds(cl) {
 }
 
 function isCaution(it) {
-  return typeof it.points !== "number";
+  return it.points === "注意";
+}
+
+// 測定値（cm）を入力する項目か。measure = [{ min: 1, points: 20 }, ...]
+function isMeasure(it) {
+  return Array.isArray(it.measure);
+}
+
+function measureDeduction(it, v) {
+  let p = 0;
+  for (const s of it.measure) if (v >= s.min) p = Math.max(p, s.points);
+  return p;
+}
+
+function measureGuide(it) {
+  return it.measure.map((s) => `${s.min}cm以上 −${s.points}`).join("／");
+}
+
+function fmtCm(v) {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+function maxPoints(it) {
+  if (isMeasure(it)) return Math.max(0, ...it.measure.map((s) => s.points));
+  return typeof it.points === "number" ? it.points : 0;
 }
 
 // その項目ひとつで不合格になる減点か
 function isCritical(it) {
-  return typeof it.points === "number" && it.points > 100 - passLine();
+  return maxPoints(it) > 100 - passLine();
 }
 
 // ---------- 採点 ----------
@@ -85,14 +109,23 @@ function isCritical(it) {
 function scoreOf(ev) {
   const cl = checklist();
   const checked = (ev && ev.checked) || {};
+  const measures = (ev && ev.measures) || {};
   let total = 0;
   const byGroup = {};
   const cautions = [];
   const deductions = [];
+  const unmeasured = [];
   for (const g of cl.groups) {
     let sum = 0;
     const labels = [];
     for (const it of g.items) {
+      if (isMeasure(it)) {
+        const v = measures[it.id];
+        if (v == null) { unmeasured.push(it.label); continue; }
+        const p = measureDeduction(it, v);
+        if (p) { sum += p; labels.push(`${it.label} ${fmtCm(v)}cm(−${p})`); }
+        continue;
+      }
       if (!checked[it.id]) continue;
       if (isCaution(it)) cautions.push(it.label);
       else {
@@ -106,12 +139,12 @@ function scoreOf(ev) {
     total += d;
   }
   const score = Math.max(0, 100 - total);
-  return { total, score, pass: score >= passLine(), byGroup, cautions, deductions };
+  return { total, score, pass: score >= passLine(), byGroup, cautions, deductions, unmeasured };
 }
 
 function getEval(id) {
   if (!state.evals[id]) {
-    state.evals[id] = { checked: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0, timerMs: 0, timerStartedAt: null };
+    state.evals[id] = { checked: {}, measures: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0, timerMs: 0, timerStartedAt: null };
   }
   return state.evals[id];
 }
@@ -383,6 +416,71 @@ async function addStudent() {
   render();
 }
 
+// ---------- 部品: 測定値の入力・補足画像 ----------
+
+const MEASURE_STYLES = {
+  buttons: "数字ボタン",
+  select: "プルダウン",
+  stepper: "＋／−ボタン",
+  keypad: "テンキー入力",
+};
+
+function cmRange(max) {
+  const a = [];
+  for (let v = 0; v <= max + 1e-9; v += 0.5) a.push(Math.round(v * 10) / 10);
+  return a;
+}
+
+function measureHTML(it, ev, locked) {
+  const v = ev.measures?.[it.id];
+  const has = v != null;
+  const p = has ? measureDeduction(it, v) : 0;
+  const dis = locked ? "disabled" : "";
+  const style = MEASURE_STYLES[state.measureInput] ? state.measureInput : "buttons";
+  let ctl;
+  if (style === "select") {
+    ctl = `<select class="msel" data-mselect="${it.id}" ${dis}>
+      <option value="" ${has ? "" : "selected"}>未測定</option>
+      ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${fmtCm(x)} cm</option>`).join("")}
+    </select>`;
+  } else if (style === "stepper") {
+    ctl = `<button class="btn mstep" data-mid="${it.id}" data-mstep="-0.5" ${dis}>−0.5</button>
+      <span class="mnow">${has ? `${fmtCm(v)} cm` : "未測定"}</span>
+      <button class="btn mstep" data-mid="${it.id}" data-mstep="0.5" ${dis}>＋0.5</button>
+      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
+  } else if (style === "keypad") {
+    ctl = `<input class="minp" type="number" inputmode="decimal" min="0" step="0.1" placeholder="未測定"
+        data-minput="${it.id}" value="${has ? v : ""}" ${dis}> <span>cm</span>
+      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
+  } else {
+    ctl = cmRange(5).map((x) => `<button class="btn mbtn ${has && x === v ? "sel" : ""}" data-mid="${it.id}" data-mv="${x}" ${dis}>${fmtCm(x)}</button>`).join("")
+      + `<button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
+  }
+  return `
+    <div class="mrow ${has ? (p ? "on" : "zero") : "unset"} ${isCritical(it) ? "is-critical" : ""}">
+      <div class="mhead">
+        <span class="mlabel">${esc(it.label)}</span>
+        <span class="mval">${has ? `${fmtCm(v)} cm` : "未測定"}</span>
+        <span class="spt">${has ? (p ? `−${p}` : "0") : "—"}</span>
+      </div>
+      <div class="mguide">${esc(measureGuide(it))}</div>
+      <div class="mctl ${style}">${ctl}</div>
+    </div>`;
+}
+
+function imageButton(g) {
+  return g.images && g.images.length ? `<button class="btn small imgbtn" data-img="${g.id}">図を見る</button>` : "";
+}
+
+function showImages(groupId) {
+  const g = checklist().groups.find((x) => x.id === groupId);
+  if (!g) return;
+  openDialog(`
+    <h2>${esc(g.name)}</h2>
+    <div class="dlg-body figs">${g.images.map((src) => `<img src="${esc(src)}" alt="${esc(g.name)}の補足図">`).join("")}</div>
+    <div class="dlg-actions"><button class="btn primary" data-dlg="cancel">閉じる</button></div>`);
+}
+
 // ---------- 画面: 評価 ----------
 
 function renderEval() {
@@ -404,6 +502,7 @@ function renderEval() {
     lastCat = g.category;
     const d = r.byGroup[g.id];
     const items = g.items.map((it) => {
+      if (isMeasure(it)) return measureHTML(it, ev, locked);
       const on = !!ev.checked[it.id];
       const pt = isCaution(it) ? "注意" : `−${it.points}`;
       return `
@@ -417,6 +516,7 @@ function renderEval() {
         <div class="sg-head">
           <span class="sg-name">${esc(g.name)}${reviewTag(g)}</span>
           <span class="sg-ded ${d ? "has" : ""}">減点 ${d}<span class="muted"> / 上限 ${g.max}</span></span>
+          ${imageButton(g)}
         </div>
         <div class="sg-items">${items}</div>
       </section>`;
@@ -424,6 +524,7 @@ function renderEval() {
     const catHead = g.category !== lastCat ? `<h3 class="cat">${esc(g.category)}</h3>` : "";
     lastCat = g.category;
     const items = g.items.map((it) => {
+      if (isMeasure(it)) return measureHTML(it, ev, locked);
       const on = !!ev.checked[it.id];
       const pt = isCaution(it)
         ? `<span class="pt caution">注意</span>`
@@ -440,7 +541,7 @@ function renderEval() {
     return `${catHead}
       <section class="group">
         <div class="group-head">
-          <span class="group-name">${esc(g.name)}${reviewTag(g)}</span>
+          <span class="group-name">${esc(g.name)}${reviewTag(g)} ${imageButton(g)}</span>
           <span class="group-ded ${d ? "has" : ""}">減点 ${d} <span class="muted">/ 上限 ${g.max}</span></span>
         </div>
         ${items}
@@ -497,6 +598,32 @@ function renderEval() {
     renderEval();
     window.scrollTo(0, y);
   }));
+  const setMeasure = (id, v) => {
+    if (locked) return;
+    ev.measures = ev.measures || {};
+    if (v == null || Number.isNaN(v)) delete ev.measures[id];
+    else ev.measures[id] = Math.round(Math.max(0, v) * 10) / 10;
+    touch(ev);
+    const y = window.scrollY;
+    renderEval();
+    window.scrollTo(0, y);
+  };
+  app.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => {
+    setMeasure(b.dataset.mid, b.dataset.mv === "" ? null : Number(b.dataset.mv));
+  }));
+  app.querySelectorAll("[data-mstep]").forEach((b) => b.addEventListener("click", () => {
+    const cur = ev.measures?.[b.dataset.mid];
+    const step = Number(b.dataset.mstep);
+    setMeasure(b.dataset.mid, cur == null ? (step > 0 ? step : 0) : cur + step);
+  }));
+  app.querySelectorAll("[data-mselect]").forEach((el) => el.addEventListener("change", () => {
+    setMeasure(el.dataset.mselect, el.value === "" ? null : Number(el.value));
+  }));
+  app.querySelectorAll("[data-minput]").forEach((el) => el.addEventListener("change", () => {
+    setMeasure(el.dataset.minput, el.value.trim() === "" ? null : Number(el.value.replace(",", ".")));
+  }));
+  app.querySelectorAll("[data-img]").forEach((b) => b.addEventListener("click", () => showImages(b.dataset.img)));
+
   const memo = app.querySelector("#memo");
   memo.addEventListener("input", () => { ev.memo = memo.value; touch(ev); });
 
@@ -543,6 +670,7 @@ async function finalize(s, ev) {
       <div><span class="muted">減点合計</span>　${r.total} 点　／　<span class="muted">所要時間</span>　${fmtTime(timerMs(ev))}</div>
       ${r.deductions.length ? `<p class="muted">減点項目</p><ul>${r.deductions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : `<p>減点項目なし</p>`}
       ${r.cautions.length ? `<p class="muted">注意</p><ul>${r.cautions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
+      ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合は 0 を入力）</p>` : ""}
     </div>`, "確定する");
   if (!ok) return;
   if (ev.timerStartedAt) { ev.timerMs = timerMs(ev); ev.timerStartedAt = null; }
@@ -590,7 +718,7 @@ async function exportResults() {
   const header = [
     "試験名", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "所要時間", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
     ...cl.groups.map((g) => `【減点】${g.name}`),
-    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}`),
+    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm）" : ""}`),
   ];
   const rows = state.students.map((s) => {
     const ev = getEvalIfAny(s.id);
@@ -604,7 +732,10 @@ async function exportResults() {
       ev ? fmtTime(timerMs(ev)) : "", fmtDate(ev?.finalizedAt), ev?.revised || 0,
       r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "",
       ...cl.groups.map((g) => (evaluated ? r.byGroup[g.id] : "")),
-      ...items.map(({ it }) => (ev?.checked[it.id] ? (isCaution(it) ? "注意" : it.points) : "")),
+      ...items.map(({ it }) => {
+        if (isMeasure(it)) return ev?.measures?.[it.id] ?? "";
+        return ev?.checked[it.id] ? (isCaution(it) ? "注意" : it.points) : "";
+      }),
     ];
   });
   const name = `評価結果_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
@@ -640,7 +771,15 @@ function renderSettings() {
           <button class="btn" data-act="cl-import">チェックリストCSVを読み込む</button>
           ${state.checklist ? `<button class="btn" data-act="cl-reset">${window.DEFAULT_CHECKLIST ? "内蔵のものに戻す" : "読み込みを解除"}</button>` : ""}
         </div>
-        <p class="muted">CSVの列：区分, 実施項目, 減点上限, チェック内容, 減点（数値 または「注意」）。評価データがある間は差し替えできません。</p>
+        <p class="muted">CSVの列：区分, 実施項目, 減点上限, チェック内容, 減点, 補足画像。減点は数値・「注意」・測定（例「測定 1以上=20 2以上=41」）のいずれか。評価データがある間は差し替えできません。</p>
+      </section>
+
+      <section class="card">
+        <h3>測定値（シワの高さなど）の入力方法</h3>
+        <div class="seg" role="radiogroup">
+          ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "buttons") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "buttons") === k}">${label}</button>`).join("")}
+        </div>
+        <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p>
       </section>
 
       <section class="card">
@@ -686,12 +825,25 @@ function renderSettings() {
     go("home");
   });
   on("cl-export", () => {
-    const rows = [["区分", "実施項目", "減点上限", "チェック内容", "減点"]];
-    for (const g of cl.groups) for (const it of g.items) rows.push([g.category, g.name, g.max, it.label, it.points]);
+    const rows = [["区分", "実施項目", "減点上限", "チェック内容", "減点", "補足画像"]];
+    for (const g of cl.groups) {
+      g.items.forEach((it, i) => rows.push([g.category, g.name, g.max, it.label, pointsText(it),
+        i === 0 && g.images ? g.images.map((x) => x.replace(/^img\//, "")).join("|") : ""]));
+    }
     shareFile(`チェックリスト_${cl.title}.csv`, toCSV(rows), "text/csv");
   });
   on("cl-import", importChecklist);
   on("offline-check", () => checkOffline());
+  app.querySelectorAll("[data-mstyle]").forEach((b) => b.addEventListener("click", () => {
+    state.measureInput = b.dataset.mstyle;
+    save();
+    // 入力中の欄を消さないよう、ボタンの見た目だけ切り替える
+    app.querySelectorAll("[data-mstyle]").forEach((x) => {
+      const sel = x.dataset.mstyle === state.measureInput;
+      x.classList.toggle("primary", sel);
+      x.setAttribute("aria-checked", sel);
+    });
+  }));
   on("cl-reset", async () => {
     if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
     if (!(await confirmDialog("チェックリストの解除", "<p>読み込んだチェックリストを解除します。</p>"))) return;
@@ -725,6 +877,26 @@ function hasEvalData() {
   return Object.values(state.evals).some((e) => e.status !== "none");
 }
 
+// 減点欄の解釈：数値 / 「注意」 / 「測定 1以上=20 2以上=41」
+function parsePoints(label, ptS) {
+  const t = ptS.replace(/\s+/g, " ").trim();
+  if (t === "注意") return { label, points: "注意" };
+  if (t.startsWith("測定")) {
+    const measure = [...t.matchAll(/([\d.]+)\s*(?:cm|ｃｍ)?\s*以上\s*[=＝:：]\s*(\d+)/g)]
+      .map((m) => ({ min: Number(m[1]), points: Number(m[2]) }))
+      .filter((x) => Number.isFinite(x.min) && Number.isFinite(x.points))
+      .sort((a, b) => a.min - b.min);
+    return measure.length ? { label, measure } : null;
+  }
+  const n = Number(t);
+  return t !== "" && Number.isFinite(n) ? { label, points: n } : null;
+}
+
+function pointsText(it) {
+  if (isMeasure(it)) return "測定 " + it.measure.map((s) => `${s.min}以上=${s.points}`).join(" ");
+  return it.points;
+}
+
 async function importChecklist() {
   if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
   const file = await pickFile(".csv,text/csv,text/plain");
@@ -733,10 +905,10 @@ async function importChecklist() {
   const groups = [];
   const errors = [];
   rows.forEach((r, i) => {
-    const [category, name, maxS, label, ptS] = r;
+    const [category, name, maxS, label, ptS = "", imgS = ""] = r;
     const max = Number(maxS);
-    const points = ptS === "注意" ? "注意" : Number(ptS);
-    if (!name || !label || !Number.isFinite(max) || (points !== "注意" && !Number.isFinite(points))) {
+    const item = parsePoints(label, ptS);
+    if (!name || !label || !Number.isFinite(max) || !item) {
       errors.push(`${i + 2}行目`);
       return;
     }
@@ -745,9 +917,11 @@ async function importChecklist() {
       g = { category, name, max, items: [] };
       groups.push(g);
     }
-    g.items.push({ label, points });
+    const imgs = imgS.split(/[|｜、]/).map((x) => x.trim()).filter(Boolean).map((x) => (x.includes("/") ? x : `img/${x}`));
+    if (imgs.length) g.images = [...(g.images || []), ...imgs];
+    g.items.push(item);
   });
-  if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点 です。");
+  if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点（数値・注意・測定）, 補足画像 です。");
   if (!groups.length) return alert("項目を読み取れませんでした。");
   const title = file.name.replace(/\.csv$/i, "").replace(/^チェックリスト_/, "");
   const ok = await confirmDialog("チェックリストの読み込み",
