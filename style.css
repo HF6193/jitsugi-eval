@@ -431,3 +431,23 @@ dialog:has(.figs) { width: min(900px, calc(100vw - 32px)); }
 .mpad-l { width: 34px; font-size: 12px; color: var(--muted); }
 .mctl .mpad .mbtn { min-width: 46px; padding: 7px 0; }
 .mctl .mbtn.dec { font-weight: 500; }
+
+/* 一覧表示：短い項目の横並び */
+.srow-wrap { display: flex; flex-wrap: wrap; gap: 6px; padding: 7px 8px; border-top: 1px solid var(--line); }
+.sg-items > .srow-wrap:first-child { border-top: 0; }
+.srow.inline {
+  width: auto;
+  min-height: 42px;
+  padding: 4px 6px 4px 8px;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-left-width: 1px;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.srow.inline:first-child { border-top: 1px solid var(--line); }
+.srow.inline .sbox { width: 22px; height: 22px; font-size: 14px; }
+.srow.inline .slabel { flex: none; }
+.srow.inline .spt { min-width: 0; }
+.srow.inline.on { border-color: var(--on-line); box-shadow: inset 0 0 0 1px var(--on-line); }
+.srow.inline.is-caution.on { border-color: var(--caution-on-line); box-shadow: inset 0 0 0 1px var(--caution-on-line); }

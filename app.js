@@ -479,6 +479,21 @@ function showImages(groupId) {
     <div class="dlg-actions"><button class="btn primary" data-dlg="cancel">閉じる</button></div>`);
 }
 
+// 項目を「短い項目が続くまとまり」と「それ以外（1つずつ）」に分ける
+const SHORT_LABEL = 10;
+function isShort(it) {
+  return !isMeasure(it) && [...it.label].length <= SHORT_LABEL;
+}
+function shortRuns(items) {
+  const runs = [];
+  for (const it of items) {
+    const last = runs[runs.length - 1];
+    if (isShort(it) && last && isShort(last[0])) last.push(it);
+    else runs.push([it]);
+  }
+  return runs;
+}
+
 // ---------- 画面: 評価 ----------
 
 function renderEval() {
@@ -499,16 +514,21 @@ function renderEval() {
     const catHead = g.category !== lastCat ? `<h3 class="cat">${esc(g.category)}</h3>` : "";
     lastCat = g.category;
     const d = r.byGroup[g.id];
-    const items = g.items.map((it) => {
-      if (isMeasure(it)) return measureHTML(it, ev, locked);
+    const row = (it, inline) => {
       const on = !!ev.checked[it.id];
       const pt = isCaution(it) ? "注意" : `−${it.points}`;
       return `
-        <button class="srow ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}"
+        <button class="srow ${inline ? "inline" : ""} ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}"
                 data-item="${it.id}" ${locked ? "disabled" : ""} aria-pressed="${on}">
           <span class="sbox">${on ? "✓" : ""}</span><span class="slabel">${esc(it.label)}</span><span class="spt">${pt}</span>
         </button>`;
-    }).join("");
+    };
+    // 短い項目（マスク・手袋など）が2つ以上続くところは横に並べる
+    let items = "";
+    for (const run of shortRuns(g.items)) {
+      if (run.length > 1) items += `<div class="srow-wrap">${run.map((it) => row(it, true)).join("")}</div>`;
+      else items += isMeasure(run[0]) ? measureHTML(run[0], ev, locked) : row(run[0], false);
+    }
     return `${catHead}
       <section class="sg">
         <div class="sg-head">
