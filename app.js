@@ -188,7 +188,7 @@ function scoreOf(ev) {
         const v = measures[it.id];
         if (v == null) { unmeasured.push(it.label); continue; }
         const p = measureDeduction(it, v);
-        if (p) { sum += p; labels.push(`${it.label} ${v.toFixed(1)}cm(−${p})`); }
+        if (p) { sum += p; labels.push(`${it.label} ${fmtMeasure(v)}(−${p})`); }
         continue;
       }
       if (!checked[it.id]) continue;
@@ -527,11 +527,21 @@ const MEASURE_STYLES = {
   keypad: "テンキー入力",
 };
 
-// 0.1cm刻みの値の一覧（0〜max）
-function cmRange(max) {
+// 測定値の範囲：0.0〜4.9cm は0.1cm刻み、5.0cm以上はまとめて「5.0cm以上」（値は5として保存）
+const MEASURE_MAX = 5;
+
+function cmRange() {
   const a = [];
-  for (let i = 0; i <= max * 10; i++) a.push(i / 10);
+  for (let i = 0; i <= MEASURE_MAX * 10; i++) a.push(i / 10);
   return a;
+}
+
+function fmtMeasure(v) {
+  return v >= MEASURE_MAX ? `${MEASURE_MAX.toFixed(1)}cm以上` : `${v.toFixed(1)}cm`;
+}
+
+function cmOptions(v, has) {
+  return cmRange().map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${fmtMeasure(x)}</option>`).join("");
 }
 
 function measureHTML(it, ev, locked) {
@@ -544,27 +554,30 @@ function measureHTML(it, ev, locked) {
   if (style === "select") {
     ctl = `<select class="msel" data-mselect="${it.id}" ${dis}>
       <option value="" ${has ? "" : "selected"}>未測定</option>
-      ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${x.toFixed(1)} cm</option>`).join("")}
+      ${cmOptions(v, has)}
     </select>`;
   } else if (style === "stepper") {
     ctl = `<button class="btn mstep" data-mid="${it.id}" data-mstep="-1" ${dis}>−1</button>
       <button class="btn mstep" data-mid="${it.id}" data-mstep="-0.1" ${dis}>−0.1</button>
-      <span class="mnow">${has ? `${v.toFixed(1)} cm` : "未測定"}</span>
+      <span class="mnow">${has ? fmtMeasure(v) : "未測定"}</span>
       <button class="btn mstep" data-mid="${it.id}" data-mstep="0.1" ${dis}>＋0.1</button>
       <button class="btn mstep" data-mid="${it.id}" data-mstep="1" ${dis}>＋1</button>
       <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   } else if (style === "keypad") {
-    ctl = `<input class="minp" type="number" inputmode="decimal" min="0" step="0.1" placeholder="未測定"
-        data-minput="${it.id}" value="${has ? v.toFixed(1) : ""}" ${dis}> <span>cm</span>
+    ctl = `<input class="minp" type="number" inputmode="decimal" min="0" max="${MEASURE_MAX}" step="0.1" placeholder="未測定"
+        data-minput="${it.id}" value="${has ? v.toFixed(1) : ""}" ${dis}> <span>cm${has && v >= MEASURE_MAX ? "以上" : ""}</span>
+      <span class="muted mhint">（5.0以上は5と入力）</span>
       <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   } else {
     // 整数の部分と小数の部分を別々のボタンで選ぶ（例：「2」→「.5」で 2.5cm）
-    const ip = has ? Math.floor(v + 1e-9) : null;
-    const dp = has ? Math.round((v - ip) * 10) : null;
-    const intBtns = [...Array(10).keys()].map((n) =>
-      `<button class="btn mbtn ${ip === n ? "sel" : ""}" data-mid="${it.id}" data-mv="${n + (dp ?? 0) / 10}" ${dis}>${n}</button>`).join("");
+    const over = has && v >= MEASURE_MAX;
+    const ip = has && !over ? Math.floor(v + 1e-9) : null;
+    const dp = has && !over ? Math.round((v - ip) * 10) : null;
+    const intBtns = [...Array(MEASURE_MAX).keys()].map((n) =>
+      `<button class="btn mbtn ${ip === n ? "sel" : ""}" data-mid="${it.id}" data-mv="${n + (dp ?? 0) / 10}" ${dis}>${n}</button>`).join("")
+      + `<button class="btn mbtn over ${over ? "sel" : ""}" data-mid="${it.id}" data-mv="${MEASURE_MAX}" ${dis}>${MEASURE_MAX.toFixed(1)}以上</button>`;
     const decBtns = [...Array(10).keys()].map((d) =>
-      `<button class="btn mbtn dec ${dp === d ? "sel" : ""}" data-mid="${it.id}" data-mv="${(ip ?? 0) + d / 10}" ${dis}>.${d}</button>`).join("");
+      `<button class="btn mbtn dec ${dp === d ? "sel" : ""}" data-mid="${it.id}" data-mv="${(ip ?? 0) + d / 10}" ${dis || (over ? "disabled" : "")}>.${d}</button>`).join("");
     ctl = `<div class="mpad">
         <div class="mpad-row"><span class="mpad-l">cm</span>${intBtns}</div>
         <div class="mpad-row"><span class="mpad-l">小数</span>${decBtns}</div>
@@ -575,7 +588,7 @@ function measureHTML(it, ev, locked) {
     <div class="mrow ${has ? (p ? "on" : "zero") : "unset"} ${isCritical(it) ? "is-critical" : ""}">
       <div class="mhead">
         <span class="mlabel">${esc(it.label)}</span>
-        <span class="mval">${has ? `${v.toFixed(1)} cm` : "未測定"}</span>
+        <span class="mval">${has ? fmtMeasure(v) : "未測定"}</span>
         <span class="spt">${has ? (p ? `−${p}` : "0") : "—"}</span>
       </div>
       <div class="mguide">${esc(measureGuide(it))}</div>
@@ -623,8 +636,10 @@ function renderEval() {
   const idx = state.students.indexOf(s);
   const next = state.students.slice(idx + 1).find((x) => !x.absent);
 
-  // 表示：一覧（1列・上から下）／1画面（全項目を1画面に収める）／詳細（大きな表示）
-  const mode = ["sheet", "fit", "detail"].includes(state.viewMode) ? state.viewMode : "sheet";
+  // 表示：一覧（1列・上から下）／詳細（大きな表示）
+  // 「1画面」（全項目を1画面に収める）は、ひとまず使わない。戻すときは FIT_VIEW を true にする
+  const views = FIT_VIEW ? ["sheet", "fit", "detail"] : ["sheet", "detail"];
+  const mode = views.includes(state.viewMode) ? state.viewMode : "sheet";
   const sheet = mode === "sheet";
   const fit = mode === "fit";
   const reviewTag = (g) => (g.check && !state.checklist ? ` <span class="chip small warn">要確認</span>` : "");
@@ -649,7 +664,7 @@ function renderEval() {
       <span class="fl">${esc(it.label)}</span>
       <select class="fsel" data-mselect="${it.id}" ${dis}>
         <option value="" ${has ? "" : "selected"}>未測定</option>
-        ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${x.toFixed(1)} cm</option>`).join("")}
+        ${cmOptions(v, has)}
       </select>
       <span class="fp">${has ? (p ? `−${p}` : "0") : "—"}</span></div>`;
   };
@@ -733,7 +748,7 @@ function renderEval() {
       </div>
       <div class="head-actions">
         ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
-        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "一覧"], ["fit", "1画面"], ["detail", "詳細"]].map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
+        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "一覧"], ["fit", "1画面"], ["detail", "詳細"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
@@ -768,7 +783,7 @@ function renderEval() {
     if (locked) return;
     ev.measures = ev.measures || {};
     if (v == null || Number.isNaN(v)) delete ev.measures[id];
-    else ev.measures[id] = Math.round(Math.max(0, v) * 10) / 10;
+    else ev.measures[id] = Math.min(MEASURE_MAX, Math.round(Math.max(0, v) * 10) / 10);
     touch(ev);
     const y = window.scrollY;
     renderEval();
@@ -827,6 +842,8 @@ function renderEval() {
 
   if (fit) fitToScreen();
 }
+
+const FIT_VIEW = false;
 
 // 1画面表示：はみ出さなくなるまで文字を小さくする（段数は画面の幅で決める）
 function fitToScreen() {
@@ -887,7 +904,7 @@ async function exportResults() {
   const header = [
     "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
     ...cl.groups.map((g) => `【減点】${g.name}`),
-    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm）" : ""}`),
+    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm・5は5.0以上）" : ""}`),
   ];
   const rows = state.students.map((s) => {
     // 欠席の学生は、途中まで入力があっても結果を出さない
