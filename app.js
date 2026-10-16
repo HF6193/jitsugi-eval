@@ -7,7 +7,7 @@
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
-const SLOTS = { main: "本番", review1: "検討用1", review2: "検討用2" };
+const SLOTS = { main: "本番", review1: "修正前", review2: "修正後" };
 let slot = readSlot();
 
 function readSlot() {
@@ -85,7 +85,7 @@ function peekSlot(sl) {
 
 function slotBanner() {
   if (slot === "main") return "";
-  // 打ち合わせ用：検討用1と検討用2を1タップで行き来する（同じ学生の画面のまま）
+  // 打ち合わせ用：修正前と修正後を1タップで行き来する（同じ学生の画面のまま）
   const other = slot === "review1" ? "review2" : "review1";
   return `<div class="slot-banner">
       <b>${esc(SLOTS[slot])}のデータを使用中</b>（${esc(examTitle())}）。本番の評価には使わないでください。
@@ -839,7 +839,7 @@ async function exportResults() {
       }),
     ];
   });
-  // 検討用の結果は「検討用1_…」という名前にして、本番の集約（評価結果_*.csv）に混ざらないようにする
+  // 検討用の結果は「修正前_…」「修正後_…」という名前にして、本番の集約（評価結果_*.csv）に混ざらないようにする
   const prefix = slot === "main" ? "評価結果" : `${SLOTS[slot]}_評価結果`;
   const name = `${prefix}_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
   await shareFile(name, toCSV([header, ...rows]), "text/csv");
@@ -895,7 +895,7 @@ function renderSettings() {
               <b>${label}</b>${k === slot ? "（使用中）" : ""}<span>${esc(k === slot ? `${state.checklist?.title || "チェックリスト未読み込み"}・学生 ${state.students.length} 名` : peekSlot(k))}</span>
             </button>`).join("")}
         </div>
-        <p class="muted">「検討用1」「検討用2」には、本番とは別にチェックリスト・名簿・評価を保存できます。修正前と修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p>
+        <p class="muted">「修正前」「修正後」には、本番とは別にチェックリスト・名簿・評価を保存できます。それぞれに修正前・修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p>
       </section>
 
       <section class="card">
