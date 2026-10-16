@@ -568,7 +568,9 @@ h3.cat[data-c] {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   padding: 10px 16px; background: #c2410c; color: #fff; font-size: 15px;
 }
-.slot-banner .btn { margin-left: auto; background: #fff; color: #c2410c; border-color: #fff; font-weight: 700; }
+.slot-banner-btns { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+.slot-banner .btn { background: #fff; color: #c2410c; border-color: #fff; font-weight: 700; }
+.slot-banner .btn.swap { background: #fff7ed; border: 2px solid #fff; font-size: 16px; }
 body:not([data-slot="main"]) .top { border-top: 4px solid #c2410c; }
 .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 8px; }
 .slot-btn {
@@ -578,3 +580,4 @@ body:not([data-slot="main"]) .top { border-top: 4px solid #c2410c; }
 .slot-btn span { font-size: 13px; color: var(--muted); }
 .slot-btn.sel { border: 2px solid var(--accent); background: var(--c0-bg); cursor: default; opacity: 1; }
 .slot-btn[data-slot-go="review1"]:not(.sel), .slot-btn[data-slot-go="review2"]:not(.sel) { border-style: dashed; }
+.btn.swap-hd { background: #fff7ed; border: 2px solid #c2410c; color: #c2410c; font-weight: 800; }

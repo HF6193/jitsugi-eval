@@ -58,13 +58,16 @@ function save() {
   }
 }
 
-function switchSlot(next) {
+function switchSlot(next, keepStudent = false) {
   if (!SLOTS[next] || next === slot) return;
+  const sid = view.name === "eval" ? view.studentId : null;
   save();
   slot = next;
   try { localStorage.setItem(SLOT_KEY, slot); } catch {}
   state = load();
   rosterEdit = false;
+  // 検討用どうしの切り替えでは、同じ学生の評価画面を開いたままにする
+  if (keepStudent && sid && hasChecklist() && state.students.some((x) => x.id === sid)) return go("eval", sid);
   go(state.teacher || state.students.length ? "home" : "settings");
 }
 
@@ -82,9 +85,14 @@ function peekSlot(sl) {
 
 function slotBanner() {
   if (slot === "main") return "";
+  // 打ち合わせ用：検討用1と検討用2を1タップで行き来する（同じ学生の画面のまま）
+  const other = slot === "review1" ? "review2" : "review1";
   return `<div class="slot-banner">
       <b>${esc(SLOTS[slot])}のデータを使用中</b>（${esc(examTitle())}）。本番の評価には使わないでください。
-      <button class="btn small" data-slot-go="main">本番に戻る</button>
+      <span class="slot-banner-btns">
+        <button class="btn small swap" data-slot-swap="${other}">⇄ ${esc(SLOTS[other])}に切り替え</button>
+        <button class="btn small" data-slot-go="main">本番に戻る</button>
+      </span>
     </div>`;
 }
 
@@ -693,6 +701,7 @@ function renderEval() {
         <div class="score-sub">減点 ${r.total}　／　合格 ${passLine()}点以上</div>
       </div>
       <div class="head-actions">
+        ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
         <button class="btn small" data-act="view">${sheet ? "詳細表示" : "一覧表示"}</button>
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
@@ -755,6 +764,7 @@ function renderEval() {
   on("back", () => go("home"));
   on("next", () => go("eval", next.id));
   on("finalize", () => finalize(s, ev));
+  app.querySelectorAll(".head-actions [data-slot-swap]").forEach((b) => (b.onclick = () => switchSlot(b.dataset.slotSwap, true)));
   on("view", () => {
     state.viewMode = sheet ? "detail" : "sheet";
     save();
@@ -1073,8 +1083,9 @@ function decorate() {
   document.body.dataset.slot = slot;
   if (slot !== "main" && !app.querySelector(".slot-banner")) {
     app.insertAdjacentHTML("afterbegin", slotBanner());
-    const b = app.querySelector("[data-slot-go]");
-    if (b) b.onclick = () => switchSlot("main");
+    const banner = app.querySelector(".slot-banner");
+    banner.querySelector("[data-slot-go]").onclick = () => switchSlot("main");
+    banner.querySelector("[data-slot-swap]").onclick = (e) => switchSlot(e.currentTarget.dataset.slotSwap, true);
   }
 }
 new MutationObserver(decorate).observe(app, { childList: true });
