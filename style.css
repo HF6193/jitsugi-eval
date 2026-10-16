@@ -562,3 +562,19 @@ h3.cat[data-c] {
   .score-sub { font-size: 10.5px; }
   .who-name { font-size: 19px; }
 }
+
+/* 検討用データの表示（本番と取り違えないように） */
+.slot-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 10px 16px; background: #c2410c; color: #fff; font-size: 15px;
+}
+.slot-banner .btn { margin-left: auto; background: #fff; color: #c2410c; border-color: #fff; font-weight: 700; }
+body:not([data-slot="main"]) .top { border-top: 4px solid #c2410c; }
+.slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 8px; }
+.slot-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer;
+}
+.slot-btn span { font-size: 13px; color: var(--muted); }
+.slot-btn.sel { border: 2px solid var(--accent); background: var(--c0-bg); cursor: default; opacity: 1; }
+.slot-btn[data-slot-go="review1"]:not(.sel), .slot-btn[data-slot-go="review2"]:not(.sel) { border-style: dashed; }

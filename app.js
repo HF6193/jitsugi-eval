@@ -4,7 +4,24 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const STORE_KEY = "jitsugi-eval-v1";
+const BASE_KEY = "jitsugi-eval-v1";
+// 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
+const SLOT_KEY = "jitsugi-eval-slot";
+const SLOTS = { main: "本番", review1: "検討用1", review2: "検討用2" };
+let slot = readSlot();
+
+function readSlot() {
+  try {
+    const v = localStorage.getItem(SLOT_KEY);
+    return SLOTS[v] ? v : "main";
+  } catch {
+    return "main";
+  }
+}
+
+function storeKey(sl = slot) {
+  return sl === "main" ? BASE_KEY : `${BASE_KEY}:${sl}`;
+}
 const app = document.getElementById("app");
 const dlg = document.getElementById("dlg");
 
@@ -25,7 +42,7 @@ let rosterEdit = false; // 一覧の「並べ替え・欠席」モード
 
 function load() {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(storeKey());
     if (raw) return Object.assign(blankState(), JSON.parse(raw));
   } catch (e) {
     console.error(e);
@@ -35,10 +52,40 @@ function load() {
 
 function save() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+    localStorage.setItem(storeKey(), JSON.stringify(state));
   } catch (e) {
     alert("保存に失敗しました。端末の空き容量を確認してください。\n" + e.message);
   }
+}
+
+function switchSlot(next) {
+  if (!SLOTS[next] || next === slot) return;
+  save();
+  slot = next;
+  try { localStorage.setItem(SLOT_KEY, slot); } catch {}
+  state = load();
+  rosterEdit = false;
+  go(state.teacher || state.students.length ? "home" : "settings");
+}
+
+// 別の保存場所の中身（チェックリスト名・人数）を見るだけ
+function peekSlot(sl) {
+  try {
+    const d = JSON.parse(localStorage.getItem(storeKey(sl)) || "null");
+    if (!d) return "未使用";
+    const t = d.checklist?.title || "チェックリスト未読み込み";
+    return `${t}・学生 ${(d.students || []).length} 名`;
+  } catch {
+    return "";
+  }
+}
+
+function slotBanner() {
+  if (slot === "main") return "";
+  return `<div class="slot-banner">
+      <b>${esc(SLOTS[slot])}のデータを使用中</b>（${esc(examTitle())}）。本番の評価には使わないでください。
+      <button class="btn small" data-slot-go="main">本番に戻る</button>
+    </div>`;
 }
 
 function checklist() {
@@ -782,7 +829,9 @@ async function exportResults() {
       }),
     ];
   });
-  const name = `評価結果_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
+  // 検討用の結果は「検討用1_…」という名前にして、本番の集約（評価結果_*.csv）に混ざらないようにする
+  const prefix = slot === "main" ? "評価結果" : `${SLOTS[slot]}_評価結果`;
+  const name = `${prefix}_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
   await shareFile(name, toCSV([header, ...rows]), "text/csv");
 }
 
@@ -829,6 +878,17 @@ function renderSettings() {
       </section>
 
       <section class="card">
+        <h3>データの切り替え（打ち合わせ・練習用）</h3>
+        <div class="slots">
+          ${Object.entries(SLOTS).map(([k, label]) => `
+            <button class="slot-btn ${k === slot ? "sel" : ""}" data-slot-go="${k}" ${k === slot ? "disabled" : ""}>
+              <b>${label}</b>${k === slot ? "（使用中）" : ""}<span>${esc(k === slot ? `${state.checklist?.title || "チェックリスト未読み込み"}・学生 ${state.students.length} 名` : peekSlot(k))}</span>
+            </button>`).join("")}
+        </div>
+        <p class="muted">「検討用1」「検討用2」には、本番とは別にチェックリスト・名簿・評価を保存できます。修正前と修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p>
+      </section>
+
+      <section class="card">
         <h3>オフライン動作</h3>
         <p data-offline>${offlineBadge(true)}</p>
         <p class="muted">「オフライン準備完了」と表示されてから機内モードにしてください。表示されない場合は、Wi-Fiにつないだままアプリを開き直してください。</p>
@@ -837,8 +897,10 @@ function renderSettings() {
 
       <section class="card">
         <h3>データの消去</h3>
-        <p class="muted">試験後、結果CSVを書き出して集約が済んだら、この端末から成績データを消去してください。</p>
-        <button class="btn danger" data-act="wipe">この端末の全データを消去</button>
+        <p class="muted">${slot === "main"
+          ? "試験後、結果CSVを書き出して集約が済んだら、この端末から成績データを消去してください。"
+          : `「${SLOTS[slot]}」のデータだけを消去します。本番のデータは消えません。`}</p>
+        <button class="btn danger" data-act="wipe">${slot === "main" ? "この端末の全データを消去" : `${SLOTS[slot]}のデータを消去`}</button>
       </section>
 
       <p class="muted center">データはこの端末内にのみ保存され、外部には送信されません。</p>
@@ -853,6 +915,7 @@ function renderSettings() {
   });
   on("cl-import", importChecklist);
   on("offline-check", () => checkOffline());
+  app.querySelectorAll(".slot-btn[data-slot-go]").forEach((b) => b.addEventListener("click", () => switchSlot(b.dataset.slotGo)));
   app.querySelectorAll("[data-mstyle]").forEach((b) => b.addEventListener("click", () => {
     state.measureInput = b.dataset.mstyle;
     save();
@@ -873,7 +936,7 @@ function renderSettings() {
   on("wipe", async () => {
     if (!(await confirmDialog("全データを消去", "<p>名簿・評価結果・設定をすべて消去します。<b>元に戻せません。</b><br>結果CSVの書き出しは済んでいますか？</p>", "消去に進む", true))) return;
     if (!(await confirmDialog("最終確認", "<p>本当に消去しますか？</p>", "消去する", true))) return;
-    localStorage.removeItem(STORE_KEY);
+    localStorage.removeItem(storeKey());
     state = blankState();
     go("home");
   });
@@ -1004,6 +1067,17 @@ function render() {
   else if (view.name === "settings") renderSettings();
   else renderHome();
 }
+
+// 画面を描くたびに、検討用データの帯を先頭に付ける
+function decorate() {
+  document.body.dataset.slot = slot;
+  if (slot !== "main" && !app.querySelector(".slot-banner")) {
+    app.insertAdjacentHTML("afterbegin", slotBanner());
+    const b = app.querySelector("[data-slot-go]");
+    if (b) b.onclick = () => switchSlot("main");
+  }
+}
+new MutationObserver(decorate).observe(app, { childList: true });
 
 // 初回は設定から
 if (!state.teacher && !state.students.length) view = { name: "settings" };
