@@ -623,7 +623,10 @@ function renderEval() {
   const idx = state.students.indexOf(s);
   const next = state.students.slice(idx + 1).find((x) => !x.absent);
 
-  const sheet = (state.viewMode || "sheet") === "sheet";
+  // 表示：一覧（1列・上から下）／1画面（全項目を1画面に収める）／詳細（大きな表示）
+  const mode = ["sheet", "fit", "detail"].includes(state.viewMode) ? state.viewMode : "sheet";
+  const sheet = mode === "sheet";
+  const fit = mode === "fit";
   const reviewTag = (g) => (g.check && !state.checklist ? ` <span class="chip small warn">要確認</span>` : "");
 
   // 区分（準備・説明、感染予防…）ごとに色を変える
@@ -632,7 +635,35 @@ function renderEval() {
   const critTag = (it) => (isCritical(it) ? `<span class="crit-tag">不合格</span>` : "");
 
   let lastCat = null;
-  const groups = sheet ? `<div class="sheet">${cl.groups.map((g) => {
+  const dis = locked ? "disabled" : "";
+  const fitChip = (it) => {
+    const on = !!ev.checked[it.id];
+    const pt = isCaution(it) ? "注意" : `−${it.points}`;
+    return `<button class="fchip ${on ? "on" : ""} ${isCaution(it) ? "is-caution" : ""} ${isCritical(it) ? "is-critical" : ""}" data-item="${it.id}" ${dis} aria-pressed="${on}"><span class="fb">${on ? "✓" : ""}</span><span class="fl">${esc(it.label)}</span><span class="fp">${pt}</span></button>`;
+  };
+  const fitMeasure = (it) => {
+    const v = ev.measures?.[it.id];
+    const has = v != null;
+    const p = has ? measureDeduction(it, v) : 0;
+    return `<div class="fmeas ${has ? (p ? "on" : "zero") : "unset"}" title="${esc(measureGuide(it))}">
+      <span class="fl">${esc(it.label)}</span>
+      <select class="fsel" data-mselect="${it.id}" ${dis}>
+        <option value="" ${has ? "" : "selected"}>未測定</option>
+        ${cmRange(10).map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${x.toFixed(1)} cm</option>`).join("")}
+      </select>
+      <span class="fp">${has ? (p ? `−${p}` : "0") : "—"}</span></div>`;
+  };
+  const fitView = () => `<div class="fit">${cl.groups.map((g) => {
+    const first = g.category !== lastCat;
+    lastCat = g.category;
+    const d = r.byGroup[g.id];
+    return `<section class="fg ${d ? "has-ded" : ""}" data-c="${catIndex[g.category]}">
+      ${first ? `<div class="fcat">${esc(g.category)}</div>` : ""}
+      <div class="fg-head"><span class="fg-name">${esc(g.name)}</span>${g.images && g.images.length ? `<button class="fimg" data-img="${g.id}">図</button>` : ""}<span class="fg-ded">${d ? `−${d}` : "0"}<small>/${g.max}</small></span></div>
+      <div class="fg-items">${g.items.map((it) => (isMeasure(it) ? fitMeasure(it) : fitChip(it))).join("")}</div>
+    </section>`;
+  }).join("")}</div>`;
+  const groups = fit ? fitView() : sheet ? `<div class="sheet">${cl.groups.map((g) => {
     const catHead = g.category !== lastCat ? `<h3 class="cat" data-c="${catIndex[g.category]}">${esc(g.category)}</h3>` : "";
     lastCat = g.category;
     const d = r.byGroup[g.id];
@@ -702,7 +733,8 @@ function renderEval() {
       </div>
       <div class="head-actions">
         ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
-        <button class="btn small" data-act="view">${sheet ? "詳細表示" : "一覧表示"}</button>
+        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "一覧"], ["fit", "1画面"], ["detail", "詳細"]].map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
+        ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
              ${next ? `<button class="btn small primary" data-act="next">次の学生 ›</button>` : ""}`
@@ -710,8 +742,9 @@ function renderEval() {
       </div>
     </header>
     ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには「修正」を押してください。</div>` : ""}
-    <main class="eval ${sheet ? "is-sheet" : ""}">
+    <main class="eval ${sheet ? "is-sheet" : ""} ${fit ? "is-fit" : ""}">
       ${groups}
+      ${fit ? "" : `
       <h3 class="cat">メモ</h3>
       <textarea id="memo" rows="3" placeholder="特記事項（任意）" ${locked ? "disabled" : ""}>${esc(ev.memo)}</textarea>
       <div class="eval-actions">
@@ -719,7 +752,7 @@ function renderEval() {
           ? `<button class="btn" data-act="unlock">修正する</button>
              ${next ? `<button class="btn primary" data-act="next">次の学生へ ›</button>` : ""}`
           : `<button class="btn primary big" data-act="finalize">評価を確定する</button>`}
-      </div>
+      </div>`}
     </main>`;
 
   app.querySelectorAll("[data-item]").forEach((b) => b.addEventListener("click", () => {
@@ -758,16 +791,30 @@ function renderEval() {
   app.querySelectorAll("[data-img]").forEach((b) => b.addEventListener("click", () => showImages(b.dataset.img)));
 
   const memo = app.querySelector("#memo");
-  memo.addEventListener("input", () => { ev.memo = memo.value; touch(ev); });
+  if (memo) memo.addEventListener("input", () => { ev.memo = memo.value; touch(ev); });
 
   const on = (act, fn) => app.querySelectorAll(`[data-act=${act}]`).forEach((el) => (el.onclick = fn));
   on("back", () => go("home"));
   on("next", () => go("eval", next.id));
   on("finalize", () => finalize(s, ev));
   app.querySelectorAll(".head-actions [data-slot-swap]").forEach((b) => (b.onclick = () => switchSlot(b.dataset.slotSwap, true)));
-  on("view", () => {
-    state.viewMode = sheet ? "detail" : "sheet";
+  app.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => {
+    state.viewMode = b.dataset.view;
     save();
+    renderEval();
+    window.scrollTo(0, 0);
+  }));
+  on("memo", async () => {
+    const r2 = await openDialog(`
+      <h2>メモ</h2>
+      <div class="dlg-body form"><textarea id="dlg-memo" rows="5" placeholder="特記事項（任意）" ${locked ? "disabled" : ""}>${esc(ev.memo)}</textarea></div>
+      <div class="dlg-actions">
+        <button class="btn" data-dlg="cancel">閉じる</button>
+        ${locked ? "" : `<button class="btn primary" data-dlg="ok">保存</button>`}
+      </div>`, () => dlg.querySelector("#dlg-memo").value);
+    if (r2 == null || locked) return;
+    ev.memo = r2.trim();
+    touch(ev);
     renderEval();
   });
   on("unlock", async () => {
@@ -777,7 +824,29 @@ function renderEval() {
     touch(ev);
     renderEval();
   });
+
+  if (fit) fitToScreen();
 }
+
+// 1画面表示：はみ出さなくなるまで文字を小さくする（段数は画面の幅で決める）
+function fitToScreen() {
+  const root = app.querySelector(".fit");
+  if (!root) return;
+  const w = window.innerWidth;
+  root.style.setProperty("--cols", w >= 1000 ? 3 : w >= 600 ? 2 : 1);
+  const fits = () => document.documentElement.scrollHeight <= window.innerHeight + 1;
+  let size = 16;
+  root.style.setProperty("--fs", `${size}px`);
+  while (!fits() && size > 8) {
+    size -= 0.5;
+    root.style.setProperty("--fs", `${size}px`);
+  }
+}
+let fitTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(() => { if (view.name === "eval") fitToScreen(); }, 150);
+});
 
 async function finalize(s, ev) {
   const r = scoreOf(ev);
@@ -1086,6 +1155,7 @@ function decorate() {
     const banner = app.querySelector(".slot-banner");
     banner.querySelector("[data-slot-go]").onclick = () => switchSlot("main");
     banner.querySelector("[data-slot-swap]").onclick = (e) => switchSlot(e.currentTarget.dataset.slotSwap, true);
+    fitToScreen();
   }
 }
 new MutationObserver(decorate).observe(app, { childList: true });
