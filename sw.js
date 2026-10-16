@@ -1,10 +1,10 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を上げる
-const VERSION = "v19";
+const VERSION = "v20";
 const CACHE = "jitsugi-eval-" + VERSION;
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "checklist.js", "manifest.webmanifest", "icon-180.png", "icon-512.png",
   // 補足画像（img/ に追加したらここにも書く。deploy.sh が書き忘れを検出する）
-  "img/corner-positions.svg", "img/corner-ab.png",
+  "img/corner-positions.svg", "img/corner-ab.svg",
 ];
 
 self.addEventListener("install", (e) => {

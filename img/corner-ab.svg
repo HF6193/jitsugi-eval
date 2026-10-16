@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" font-family="-apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif">
+  <rect width="560" height="200" fill="#fff"/>
+  <text x="280" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#1c2430">三角コーナーの a・b</text>
+  <!-- マットレスの側面 -->
+  <rect x="20" y="50" width="520" height="120" fill="#f6f7f9" stroke="#1c2430" stroke-width="4"/>
+  <!-- マットレスの辺（角の位置） -->
+  <line x1="200" y1="50" x2="200" y2="170" stroke="#1c2430" stroke-width="3" stroke-dasharray="10 7"/>
+  <!-- a（赤の破線） -->
+  <line x1="200" y1="80" x2="535" y2="56" stroke="#c0392b" stroke-width="7" stroke-dasharray="16 9"/>
+  <!-- b（青の破線） -->
+  <line x1="380" y1="168" x2="535" y2="58" stroke="#3b78c2" stroke-width="7" stroke-dasharray="16 9"/>
+  <!-- ラベル -->
+  <g font-weight="800" font-size="26">
+    <text x="245" y="122" fill="#c0392b">a</text>
+    <text x="300" y="160" fill="#3b78c2">b</text>
+  </g>
+  <path d="M262 112 l14 -16 m-10 0 l10 0 l0 10" stroke="#c0392b" stroke-width="3" fill="none"/>
+  <path d="M322 152 l34 0 m-8 -6 l8 6 l-8 6" stroke="#3b78c2" stroke-width="3" fill="none"/>
+  <text x="280" y="192" text-anchor="middle" font-size="14" fill="#5f6977">a：マットレスの辺から落ちていないか　／　b：ゆるみがないか</text>
+</svg>
