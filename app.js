@@ -549,7 +549,7 @@ function measureHTML(it, ev, locked) {
   const has = v != null;
   const p = has ? measureDeduction(it, v) : 0;
   const dis = locked ? "disabled" : "";
-  const style = MEASURE_STYLES[state.measureInput] ? state.measureInput : "buttons";
+  const style = MEASURE_STYLES[state.measureInput] ? state.measureInput : "select";
   let ctl;
   if (style === "select") {
     ctl = `<select class="msel" data-mselect="${it.id}" ${dis}>
@@ -968,7 +968,7 @@ function renderSettings() {
       <section class="card">
         <h3>測定値（シワの高さなど）の入力方法</h3>
         <div class="seg" role="radiogroup">
-          ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "buttons") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "buttons") === k}">${label}</button>`).join("")}
+          ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "select") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "select") === k}">${label}</button>`).join("")}
         </div>
         <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p>
       </section>
