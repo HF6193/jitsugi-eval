@@ -4,6 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
+const APP_VERSION = "v27";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -36,35 +37,63 @@ function blankState() {
   };
 }
 
+let loadError = "";
+let persistence = { ok: true, at: null, error: "" };
 let state = load();
+let observedSignature = dataSignature();
 let view = { name: "home", studentId: null };
 let rosterEdit = false; // 一覧の「並べ替え・欠席」モード
 
 function load() {
   try {
     const raw = localStorage.getItem(storeKey());
-    if (raw) return Object.assign(blankState(), JSON.parse(raw));
+    if (raw) {
+      const loaded = Object.assign(blankState(), JSON.parse(raw));
+      validateState(loaded);
+      // 旧版には評価ごとの教員名がないため、現在の登録名を引き継ぐ。
+      for (const ev of Object.values(loaded.evals)) if (!ev.teacher) ev.teacher = loaded.teacher;
+      return loaded;
+    }
   } catch (e) {
     console.error(e);
+    loadError = "保存データを読み込めません。元データを保護しています。設定からバックアップを復元してください。";
   }
   return blankState();
 }
 
 function save() {
+  if (loadError) { persistence = { ok: false, error: loadError }; updateSaveBadge(); return false; }
+  const signature = dataSignature();
+  if (signature !== observedSignature) {
+    state.dataRevision = (state.dataRevision || 0) + 1;
+    observedSignature = signature;
+  }
+  const at = new Date().toISOString();
   try {
-    localStorage.setItem(storeKey(), JSON.stringify(state));
+    localStorage.setItem(storeKey(), JSON.stringify({ ...state, savedAt: at }));
+    state.savedAt = at;
+    persistence = { ok: true, at, error: "" };
+    updateSaveBadge();
+    return true;
   } catch (e) {
-    alert("保存に失敗しました。端末の空き容量を確認してください。\n" + e.message);
+    const wasOK = persistence.ok;
+    persistence = { ok: false, error: "保存できません。再保存するか、設定からバックアップを保存してください。" };
+    updateSaveBadge();
+    if (wasOK) alert(persistence.error + "\n" + e.message);
+    return false;
   }
 }
 
 function switchSlot(next, keepStudent = false) {
   if (!SLOTS[next] || next === slot) return;
   const sid = view.name === "eval" ? view.studentId : null;
-  save();
+  if (!loadError && !save()) return;
   slot = next;
   try { localStorage.setItem(SLOT_KEY, slot); } catch {}
+  loadError = "";
   state = load();
+  observedSignature = dataSignature();
+  persistence = { ok: !loadError, at: state.savedAt, error: loadError };
   rosterEdit = false;
   // 検討用どうしの切り替えでは、同じ学生の評価画面を開いたままにする
   if (keepStudent && sid && hasChecklist() && state.students.some((x) => x.id === sid)) return go("eval", sid);
@@ -166,7 +195,8 @@ function maxPoints(it) {
 
 // その項目ひとつで不合格になる減点か
 function isCritical(it) {
-  return maxPoints(it) > 100 - passLine();
+  const group = checklist().groups.find(g => g.items.some(x => x.id === it.id));
+  return Math.min(maxPoints(it), group?.max ?? 100) > 100 - passLine();
 }
 
 // ---------- 採点 ----------
@@ -186,7 +216,7 @@ function scoreOf(ev) {
     for (const it of g.items) {
       if (isMeasure(it)) {
         const v = measures[it.id];
-        if (v == null) { unmeasured.push(it.label); continue; }
+        if (!validMeasure(v)) { unmeasured.push(it.label); continue; }
         const p = measureDeduction(it, v);
         if (p) { sum += p; labels.push(`${it.label} ${fmtMeasure(v)}(−${p})`); }
         continue;
@@ -209,15 +239,15 @@ function scoreOf(ev) {
 
 function getEval(id) {
   if (!state.evals[id]) {
-    state.evals[id] = { checked: {}, measures: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0 };
+    state.evals[id] = { checked: {}, measures: {}, memo: "", status: "none", updatedAt: null, finalizedAt: null, revised: 0, teacher: state.teacher, history: [] };
   }
   return state.evals[id];
 }
 
 function touch(ev) {
-  if (ev.status === "none") ev.status = "draft";
+  if (ev.status === "none") { ev.status = "draft"; ev.teacher = state.teacher; }
   ev.updatedAt = new Date().toISOString();
-  save();
+  return save();
 }
 
 // ---------- ユーティリティ ----------
@@ -236,7 +266,7 @@ function fmtDate(iso) {
 function stamp() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 function isStandalone() {
@@ -287,7 +317,11 @@ function pickFile(accept) {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
-    input.onchange = () => resolve(input.files[0] || null);
+    input.hidden = true;
+    const finish = (file) => { input.remove(); resolve(file); };
+    input.onchange = () => finish(input.files[0] || null);
+    input.addEventListener("cancel", () => finish(null), { once: true });
+    document.body.appendChild(input);
     input.click();
   });
 }
@@ -298,9 +332,9 @@ async function shareFile(name, content, type) {
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });
-      return;
+      return { status: "shared" };
     } catch (e) {
-      if (e.name === "AbortError") return;
+      if (e.name === "AbortError") return { status: "cancelled" };
     }
   }
   const url = URL.createObjectURL(file);
@@ -311,6 +345,7 @@ async function shareFile(name, content, type) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return { status: "download" };
 }
 
 // ---------- ダイアログ ----------
@@ -342,11 +377,133 @@ function confirmDialog(title, body, okLabel = "OK", danger = false) {
     </div>`).then((r) => r === "ok");
 }
 
+// 保存・復元は採点データを変換せず、旧版の項目IDを保持する。
+function validId(id) {
+  return typeof id === "string" && !!id.trim() && !["__proto__", "constructor", "prototype"].includes(id);
+}
+function validMeasure(v) { return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 5 && Math.abs(v * 10 - Math.round(v * 10)) < 1e-8; }
+function plainObject(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+function validateChecklist(cl) {
+  if (!plainObject(cl) || typeof cl.title !== "string" || !Number.isFinite(cl.passLine) || cl.passLine < 0 || cl.passLine > 100 || !Array.isArray(cl.groups) || !cl.groups.length) throw new Error("チェックリストの試験名・合格点・項目群が不正です。");
+  const seen = new Set();
+  for (const g of cl.groups) {
+    if (!plainObject(g) || typeof g.name !== "string" || !g.name.trim() || typeof g.category !== "string" || !Number.isFinite(g.max) || g.max < 0 || g.max > 100 || !Array.isArray(g.items) || !g.items.length) throw new Error("項目群の名称・減点上限・内容が不正です。");
+    const key = JSON.stringify([g.category, g.name]);
+    if (seen.has(key)) throw new Error(`項目群が離れた行に重複しています：${g.name}`);
+    seen.add(key);
+    if (g.images && (!Array.isArray(g.images) || g.images.some(src => typeof src !== "string" || !/^img\/[\w.-]+\.(svg|png|jpe?g|webp)$/i.test(src)))) throw new Error("補足画像の指定が不正です。");
+    for (const it of g.items) {
+      if (!plainObject(it) || typeof it.label !== "string" || !it.label.trim()) throw new Error("チェック内容が空欄です。");
+      if (Array.isArray(it.measure)) {
+        const mins = new Set();
+        if (!it.measure.length) throw new Error("測定基準がありません。");
+        let last = -1;
+        for (const rule of it.measure) {
+          if (!validMeasure(rule.min) || !Number.isFinite(rule.points) || rule.points < 0 || rule.points > 100 || mins.has(rule.min) || rule.points < last) throw new Error(`測定基準が不正です：${it.label}`);
+          mins.add(rule.min); last = rule.points;
+        }
+      } else if (it.points !== "注意" && (!Number.isFinite(it.points) || it.points < 0 || it.points > 100)) throw new Error(`減点は0〜100の数値または「注意」にしてください：${it.label}`);
+    }
+  }
+}
+function validateState(d) {
+  if (!plainObject(d) || typeof d.teacher !== "string" || !Array.isArray(d.students) || !plainObject(d.evals)) throw new Error("保存データの形式が不正です。");
+  if (d.checklist) validateChecklist(d.checklist);
+  const ids = new Set();
+  for (const st of d.students) {
+    if (!plainObject(st) || !validId(st.id) || typeof st.name !== "string" || ids.has(st.id) || (st.absent !== undefined && typeof st.absent !== "boolean")) throw new Error("名簿の学籍番号・氏名・重複を確認してください。");
+    ids.add(st.id);
+  }
+  const items = new Map(withIds(d.checklist || {groups:[]}).groups.flatMap(g => g.items.map(it => [it.id,it])));
+  function snapshot(v) {
+    if (!plainObject(v) || !plainObject(v.checked) || (v.measures != null && !plainObject(v.measures)) || (v.memo != null && typeof v.memo !== "string")) throw new Error("評価内容の形式が不正です。");
+    for (const [id, checked] of Object.entries(v.checked)) if (!items.has(id) || typeof checked !== "boolean" || isMeasure(items.get(id))) throw new Error("減点項目がチェックリストと一致しません。");
+    for (const [id, value] of Object.entries(v.measures || {})) if (!items.has(id) || !isMeasure(items.get(id)) || !validMeasure(value)) throw new Error("測定値が不正です。");
+  }
+  for (const [id, ev] of Object.entries(d.evals)) {
+    if (!ids.has(id) || !["none","draft","final"].includes(ev?.status)) throw new Error("評価と名簿の対応が不正です。");
+    snapshot(ev);
+    if (ev.teacher != null && typeof ev.teacher !== "string") throw new Error("評価者が不正です。");
+    if (ev.revisionBase) snapshot(ev.revisionBase);
+    if (ev.history != null) {
+      if (!Array.isArray(ev.history)) throw new Error("修正履歴が不正です。");
+      for (const h of ev.history) {
+        if (!plainObject(h) || typeof h.at !== "string" || typeof h.editor !== "string") throw new Error("履歴の日付・評価者が不正です。");
+        snapshot(h.after); if (h.before) snapshot(h.before);
+      }
+    }
+  }
+  if (d.dataRevision != null && (!Number.isSafeInteger(d.dataRevision) || d.dataRevision < 0)) throw new Error("保存番号が不正です。");
+}
+function dataSignature() {
+  return JSON.stringify([state.teacher,state.checklist,state.students,Object.fromEntries(Object.entries(state.evals).filter(([,e])=>e.status!=="none"))]);
+}
+function saveStatusHTML() {
+  if (loadError) return `<div class="warn-text">${esc(loadError)}</div>`;
+  const last = state.lastExport;
+  const changed = last && last.revision !== (state.dataRevision || 0);
+  return `<span class="${persistence.ok ? "muted" : "warn-text"}">${persistence.ok ? (state.savedAt ? `保存済み ${fmtDate(state.savedAt)}` : "入力すると自動保存します") : "未保存：端末への保存に失敗しています"}</span>
+    ${persistence.ok ? "" : '<button class="btn small" data-retry-save>再保存</button>'}
+    <span class="${changed ? "warn-text" : "muted"}">${last ? (changed ? "書き出し後の変更あり：再書き出しが必要" : `書き出し操作 ${fmtDate(last.at)}（受領はMac側で確認）`) : "結果CSV：未書き出し"}</span>`;
+}
+function updateSaveBadge() {
+  document.querySelectorAll("[data-save-status]").forEach(el=>{el.innerHTML=saveStatusHTML();});
+  document.querySelectorAll("[data-retry-save]").forEach(el=>{el.onclick=()=>{save();render();};});
+}
+function evaluationSnapshot(ev) {
+  return JSON.parse(JSON.stringify({checked:ev.checked || {},measures:ev.measures || {},memo:ev.memo || "",teacher:ev.teacher || state.teacher,score:scoreOf(ev).score,finalizedAt:ev.finalizedAt || null}));
+}
+function historyHTML(ev) {
+  if (!ev.history?.length) return "";
+  const items = checklist().groups.flatMap(g=>g.items);
+  const display=(v)=>v == null ? "未測定" : fmtMeasure(v);
+  return `<details class="history"><summary>確定・修正履歴（${ev.history.length}件）</summary>${ev.history.map(h=>{
+    const changes=[];
+    const before=h.before, after=h.after;
+    for(const it of items) {
+      if(isMeasure(it)) { if(!before || before.measures?.[it.id]!==after.measures?.[it.id]) changes.push(`${it.label}：${before ? display(before.measures?.[it.id])+" → " : ""}${display(after.measures?.[it.id])}`); }
+      else if(!before ? after.checked[it.id] : !!before.checked[it.id]!==!!after.checked[it.id]) changes.push(`${it.label}：${before ? (before.checked[it.id]?"該当":"該当なし")+" → " : ""}${after.checked[it.id]?"該当":"該当なし"}`);
+    }
+    if(before && before.memo!==after.memo) changes.push(`メモ：${before.memo || "なし"} → ${after.memo || "なし"}`);
+    return `<div><b>${esc(fmtDate(h.at))} ${before?"再確定":"初回確定"}（操作：${esc(h.editor)}）</b><p>${before ? `${before.score} → ` : ""}${after.score}点</p><ul>${changes.map(x=>`<li>${esc(x)}</li>`).join("") || "<li>減点・測定値・メモの変更なし</li>"}</ul></div>`;
+  }).join("")}</details>`;
+}
+async function exportBackup() {
+  if (loadError) {
+    // 読めないデータも上書きせず退避できる。
+    try { return await shareFile(`復旧用_${SLOTS[slot]}_${stamp()}.txt`,localStorage.getItem(storeKey()) || "", "text/plain"); }
+    catch(e) { return alert("元データを取得できません："+e.message); }
+  }
+  const data = { format:"jitsugi-eval-backup",schema:1,createdAt:new Date().toISOString(),slot,state };
+  return shareFile(`実技評価バックアップ_${SLOTS[slot]}_${stamp()}.json`,JSON.stringify(data,null,2),"application/json");
+}
+async function restoreBackup() {
+  const file = await pickFile(".json,application/json");
+  if(!file) return;
+  let payload;
+  try {
+    if(file.size>20*1024*1024) throw new Error("20MBを超えるファイルは読み込めません。");
+    payload=JSON.parse(await readTextFile(file));
+    if(payload.format!=="jitsugi-eval-backup" || payload.schema!==1 || !SLOTS[payload.slot]) throw new Error("対応するバックアップではありません。");
+    validateState(payload.state);
+  } catch(e) { return alert("復元していません："+e.message); }
+  const d=payload.state;
+  if(!(await confirmDialog("バックアップから復元",`<p>作成：${esc(payload.createdAt)}／保存元：${esc(SLOTS[payload.slot])}</p><p>試験：${esc(d.checklist?.title || "未設定")}／版：${esc(d.checklist?.version || "なし")}／学生：${d.students.length}名／教員：${esc(d.teacher)}</p><p><b>現在の「${SLOTS[slot]}」の内容を置き換えます。</b>必要な現データは先にバックアップしてください。他の保存場所は変わりません。</p>`,"この内容で復元する",true))) return;
+  const restored=Object.assign(blankState(),d);
+  delete restored.lastExport; // 復元後は改めて提出する。
+  restored.dataRevision=(restored.dataRevision || 0)+1;
+  restored.savedAt=new Date().toISOString();
+  try { localStorage.setItem(storeKey(),JSON.stringify(restored)); }
+  catch(e) { return alert("保存できないため復元を中止しました。元データは変更していません。\\n"+e.message); }
+  state=restored; loadError=""; observedSignature=dataSignature(); persistence={ok:true,at:state.savedAt};
+  go("home");
+}
+
 // ---------- 画面: ホーム ----------
 
 function renderHome() {
   const cl = checklist();
-  const done = state.students.filter((s) => getEvalIfAny(s.id)?.status === "final").length;
+  const done = state.students.filter((s) => !s.absent && getEvalIfAny(s.id)?.status === "final").length;
   const banner = isStandalone() ? "" : `
     <div class="banner">
       <b>ホーム画面に追加して使ってください。</b>
@@ -358,7 +515,7 @@ function renderHome() {
   const rows = state.students.map((s, i) => {
     const ev = getEvalIfAny(s.id);
     const st = ev?.status || "none";
-    const r = ev && st !== "none" ? scoreOf(ev) : null;
+    const r = !s.absent && ev && st !== "none" ? scoreOf(ev) : null;
     const chip = s.absent
       ? `<span class="chip absent">欠席</span>`
       : { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, final: `<span class="chip ok">確定</span>` }[st];
@@ -384,8 +541,8 @@ function renderHome() {
         <span class="row-id">${esc(s.id)}</span>
         <span class="row-name">${esc(s.name)}</span>
         <span class="row-status">${chip}</span>
-        <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? r.score : "—"}</span>
-        <span class="row-pass">${r ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
+        <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? `${r.score}${st === "final" ? "" : "（暫定）"}` : "—"}</span>
+        <span class="row-pass">${r && st === "final" ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
       </button>`;
   }).join("");
 
@@ -407,9 +564,10 @@ function renderHome() {
           <button class="btn primary small" data-act="load-checklist">チェックリストCSVを読み込む</button>
         </div>`}
       <div class="toolbar">
+        <details class="roster-tools" ${!n || rosterEdit ? "open" : ""}><summary>名簿管理</summary><div class="btns">
         <button class="btn" data-act="import-roster">名簿CSVを読み込む</button>
         <button class="btn" data-act="add-student">学生を追加</button>
-        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席を終える" : "並べ替え・欠席"}</button>` : ""}
+        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席を終える" : "並べ替え・欠席"}</button>` : ""}</div></details>
         <span class="spacer"></span>
         <button class="btn primary" data-act="export">結果をCSVで書き出す</button>
       </div>
@@ -452,10 +610,12 @@ function renderHome() {
     const to = { up: i - 1, down: i + 1, last: list.length }[b.dataset.move];
     list.splice(Math.max(0, Math.min(to, list.length)), 0, s);
   })));
-  app.querySelectorAll("[data-absent]").forEach((b) => b.addEventListener("click", () => keepScroll(() => {
+  app.querySelectorAll("[data-absent]").forEach((b) => b.addEventListener("click", async () => {
     const s = state.students[at(b.dataset.absent)];
-    s.absent = !s.absent;
-  })));
+    if (!s.absent && getEvalIfAny(s.id)?.status && getEvalIfAny(s.id).status !== "none" &&
+        !(await confirmDialog("欠席に変更", `<p>${esc(s.id)} ${esc(s.name)} の評価を集計対象から外します。入力内容は保持され、欠席を取り消すと戻ります。</p>`, "欠席にする"))) return;
+    keepScroll(() => { s.absent = !s.absent; });
+  }));
   const re = app.querySelector("[data-act=roster-edit]");
   if (re) re.onclick = () => { rosterEdit = !rosterEdit; renderHome(); };
   app.querySelector("[data-act=settings]").onclick = () => go("settings");
@@ -475,13 +635,24 @@ async function importRoster() {
   if (!file) return;
   const rows = parseCSV(await readTextFile(file));
   const list = rows
-    .filter((r) => !/学籍|番号|id/i.test(r[0]))
+    .filter((r, i) => !(i === 0 && /^(学籍番号|番号|id)$/i.test(r[0])))
     .map((r) => ({ id: r[0], name: r[1] || "" }))
     .filter((s) => s.id);
   if (!list.length) {
     alert("学生を読み取れませんでした。1列目に学籍番号、2列目に氏名のCSVを用意してください。");
     return;
   }
+  const errors = [];
+  const seen = new Map();
+  for (const s of list) {
+    if (!s.name.trim()) errors.push(`氏名が空欄：${s.id}`);
+    if (!validId(s.id)) errors.push(`使用できない学籍番号：${s.id}`);
+    if (seen.has(s.id)) errors.push(`学籍番号の重複：${s.id}（${seen.get(s.id)}／${s.name}）`);
+    seen.set(s.id, s.name);
+    const prior = state.students.find(x => x.id === s.id);
+    if (prior && prior.name !== s.name) errors.push(`登録済みの氏名と不一致：${s.id}（${prior.name}／${s.name}）`);
+  }
+  if (errors.length) return alert("名簿は読み込んでいません。\n" + errors.join("\n"));
   const existing = new Set(state.students.map((s) => s.id));
   const added = list.filter((s) => !existing.has(s.id));
   const dup = list.length - added.length;
@@ -508,7 +679,8 @@ async function addStudent() {
     </div>`, () => {
     const id = dlg.querySelector("#f-id").value.trim();
     const name = dlg.querySelector("#f-name").value.trim();
-    if (!id) { dlg.querySelector("#f-id").focus(); return false; }
+    if (!validId(id)) { alert("学籍番号を確認してください。"); dlg.querySelector("#f-id").focus(); return false; }
+    if (!name) { alert("氏名を入力してください。"); return false; }
     if (state.students.some((s) => s.id === id)) { alert("その学籍番号は登録済みです。"); return false; }
     return { id, name };
   });
@@ -634,7 +806,7 @@ function renderEval() {
   const locked = ev.status === "final";
   const r = scoreOf(ev);
   const idx = state.students.indexOf(s);
-  const next = state.students.slice(idx + 1).find((x) => !x.absent);
+  const next = [...state.students.slice(idx + 1), ...state.students.slice(0, idx)].find(x => !x.absent && getEvalIfAny(x.id)?.status !== "final");
 
   // 表示：一覧（1列・上から下）／詳細（大きな表示）
   // 「1画面」（全項目を1画面に収める）は、ひとまず使わない。戻すときは FIT_VIEW を true にする
@@ -647,7 +819,7 @@ function renderEval() {
   // 区分（準備・説明、感染予防…）ごとに色を変える
   const catIndex = {};
   for (const g of cl.groups) if (!(g.category in catIndex)) catIndex[g.category] = Object.keys(catIndex).length % 6;
-  const critTag = (it) => (isCritical(it) ? `<span class="crit-tag">不合格</span>` : "");
+  const critTag = (it) => (isCritical(it) ? `<span class="crit-tag">${ev.checked[it.id] ? "不合格に該当" : "該当時"}</span>` : "");
 
   let lastCat = null;
   const dis = locked ? "disabled" : "";
@@ -736,36 +908,38 @@ function renderEval() {
 
   app.innerHTML = `
     <header class="top eval-top">
-      <button class="btn" data-act="back">‹ 一覧</button>
+      <button class="btn" data-act="back">‹ 学生一覧へ</button>
       <div class="who">
         <div class="who-id">${esc(s.id)}</div>
         <div class="who-name">${esc(s.name)}</div>
       </div>
       <div class="score ${r.pass ? "" : "is-fail"}">
         <div class="score-main"><span class="score-v">${r.score}</span><span class="score-u">点</span>
-        <span class="verdict">${r.pass ? "合格" : "不合格"}</span></div>
+        <span class="verdict">${r.unmeasured.length ? "判定保留" : (!locked ? "暫定点" : (r.pass ? "合格" : "不合格"))}</span></div>
         <div class="score-sub">減点 ${r.total}　／　合格 ${passLine()}点以上</div>
       </div>
       <div class="head-actions">
         ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
-        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "一覧"], ["fit", "1画面"], ["detail", "詳細"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
+        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "標準"], ["fit", "1画面"], ["detail", "大きく表示"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
-             ${next ? `<button class="btn small primary" data-act="next">次の学生 ›</button>` : ""}`
+             ${next ? `<button class="btn small primary" data-act="next">次の未評価学生 ›</button>` : ""}`
           : `<button class="btn small primary" data-act="finalize">確定</button>`}
       </div>
     </header>
     ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには「修正」を押してください。</div>` : ""}
     <main class="eval ${sheet ? "is-sheet" : ""} ${fit ? "is-fit" : ""}">
+      <p class="note">該当する減点項目・注意項目を選んでください。できている項目にはチェックしません。</p>
       ${groups}
+      ${historyHTML(ev)}
       ${fit ? "" : `
       <h3 class="cat">メモ</h3>
       <textarea id="memo" rows="3" placeholder="特記事項（任意）" ${locked ? "disabled" : ""}>${esc(ev.memo)}</textarea>
       <div class="eval-actions">
         ${locked
           ? `<button class="btn" data-act="unlock">修正する</button>
-             ${next ? `<button class="btn primary" data-act="next">次の学生へ ›</button>` : ""}`
+             ${next ? `<button class="btn primary" data-act="next">次の未評価学生へ ›</button>` : ""}`
           : `<button class="btn primary big" data-act="finalize">評価を確定する</button>`}
       </div>`}
     </main>`;
@@ -834,6 +1008,7 @@ function renderEval() {
   });
   on("unlock", async () => {
     if (!(await confirmDialog("評価を修正", "<p>確定を解除して修正できる状態にします。書き出し済みのCSVがある場合は、修正後にもう一度書き出してください。</p>", "修正する"))) return;
+    ev.revisionBase = evaluationSnapshot(ev);
     ev.status = "draft";
     ev.revised = (ev.revised || 0) + 1;
     touch(ev);
@@ -866,7 +1041,15 @@ window.addEventListener("resize", () => {
 });
 
 async function finalize(s, ev) {
+  if (!state.teacher) { alert("設定で評価者（教員名）を入力してください。"); return go("settings"); }
   const r = scoreOf(ev);
+  if (r.unmeasured.length) {
+    alert("未測定のため確定できません。シワがない場合は0.0cmを選んでください。\n" + r.unmeasured.join("、"));
+    const target = app.querySelector(".mrow.unset");
+    target?.scrollIntoView({ block: "center" });
+    target?.querySelector("select, input, button")?.focus();
+    return;
+  }
   const ok = await confirmDialog("評価を確定", `
     <div class="sum">
       <div><span class="muted">学生</span>　${esc(s.id)}　${esc(s.name)}</div>
@@ -877,9 +1060,21 @@ async function finalize(s, ev) {
       ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合は 0 を入力）</p>` : ""}
     </div>`, "確定する");
   if (!ok) return;
+  const before = JSON.parse(JSON.stringify(ev));
   ev.status = "final";
+  ev.teacher = before.status === "none" ? state.teacher : (ev.teacher || state.teacher);
   ev.finalizedAt = new Date().toISOString();
-  touch(ev);
+  ev.history = [...(ev.history || []), { at: ev.finalizedAt, editor: state.teacher,
+    before: ev.revisionBase || null, after: evaluationSnapshot(ev) }];
+  delete ev.revisionBase;
+  if (!touch(ev)) {
+    for (const key of Object.keys(ev)) delete ev[key];
+    Object.assign(ev, before);
+    // 失敗した確定状態はメモリにも残さない。再保存は評価途中の状態を保存する。
+    observedSignature = dataSignature();
+    renderEval();
+    return;
+  }
   renderEval();
   window.scrollTo(0, 0);
 }
@@ -899,10 +1094,15 @@ async function exportResults() {
        <ul class="preview">${notFinal.map((s) => `<li>${esc(s.id)}　${esc(s.name)}</li>`).join("")}</ul>`, "書き出す");
     if (!ok) return;
   }
+  if (loadError || (!persistence.ok && !save())) return alert("未保存のため通常のCSV書き出しを止めました。設定からバックアップを保存してください。");
+  if (!save()) return;
+  const exportState = state, exportSlot = slot, exportRevision = state.dataRevision || 0;
+  const missingFinal = state.students.filter(s => !s.absent && getEvalIfAny(s.id)?.status === "final" && scoreOf(getEvalIfAny(s.id)).unmeasured.length);
+  if (missingFinal.length) return alert("旧版で未測定のまま確定された評価があります。修正して測定値を入力してください。\n" + missingFinal.map(s=>s.id+" "+s.name).join("\n"));
   const cl = checklist();
   const items = cl.groups.flatMap((g) => g.items.map((it) => ({ g, it })));
   const header = [
-    "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ",
+    "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ", "修正履歴", "合格点",
     ...cl.groups.map((g) => `【減点】${g.name}`),
     ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm・5は5.0以上）" : ""}`),
   ];
@@ -913,11 +1113,11 @@ async function exportResults() {
     const r = scoreOf(ev);
     const evaluated = st !== "none" && st !== "absent";
     return [
-      examTitle(), cl.version || "", state.teacher, s.id, s.name,
+      examTitle(), cl.version || "", ev?.teacher || state.teacher, s.id, s.name,
       { none: "未評価", draft: "未確定", final: "確定", absent: "欠席" }[st],
-      evaluated ? r.score : "", evaluated ? (r.pass ? "合" : "否") : "", evaluated ? r.total : "",
+      evaluated ? r.score : "", st === "final" ? (r.unmeasured.length ? "保留" : (r.pass ? "合" : "否")) : "", evaluated ? r.total : "",
       fmtDate(ev?.finalizedAt), ev?.revised || 0,
-      r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "",
+      r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "", JSON.stringify(ev?.history || []), passLine(),
       ...cl.groups.map((g) => (evaluated ? r.byGroup[g.id] : "")),
       ...items.map(({ it }) => {
         if (isMeasure(it)) return ev?.measures?.[it.id] ?? "";
@@ -928,7 +1128,13 @@ async function exportResults() {
   // 検討用の結果は「修正前版_…」「修正後版_…」という名前にして、本番の集約（評価結果_*.csv）に混ざらないようにする
   const prefix = slot === "main" ? "評価結果" : `${SLOTS[slot]}_評価結果`;
   const name = `${prefix}_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
-  await shareFile(name, toCSV([header, ...rows]), "text/csv");
+  const result = await shareFile(name, toCSV([header, ...rows]), "text/csv");
+  if (result?.status === "cancelled") return;
+  if (state === exportState && slot === exportSlot && result) {
+    state.lastExport = { at: new Date().toISOString(), revision: exportRevision, name, status: result.status };
+    save();
+    render();
+  }
 }
 
 // ---------- 画面: 設定 ----------
@@ -938,7 +1144,7 @@ function renderSettings() {
   const nItems = cl.groups.reduce((n, g) => n + g.items.length, 0);
   app.innerHTML = `
     <header class="top">
-      <button class="btn" data-act="back">‹ 一覧</button>
+      <button class="btn" data-act="back">‹ 学生一覧へ</button>
       <div class="title">設定</div>
       <span></span>
     </header>
@@ -966,26 +1172,26 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <h3>測定値（シワの高さなど）の入力方法</h3>
+        <details><summary>測定値の入力方法（詳細設定）</summary><p class="muted">通常はプルダウンを使用します。打ち合わせ用に他の方法も残しています。</p>
         <div class="seg" role="radiogroup">
           ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "select") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "select") === k}">${label}</button>`).join("")}
         </div>
-        <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p>
+        <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p></details>
       </section>
 
       <section class="card">
-        <h3>データの切り替え（打ち合わせ・練習用）</h3>
+        <details><summary>練習・検討用データ</summary>
         <div class="slots">
           ${Object.entries(SLOTS).map(([k, label]) => `
             <button class="slot-btn ${k === slot ? "sel" : ""}" data-slot-go="${k}" ${k === slot ? "disabled" : ""}>
               <b>${label}</b>${k === slot ? "（使用中）" : ""}<span>${esc(k === slot ? `${state.checklist?.title || "チェックリスト未読み込み"}・学生 ${state.students.length} 名` : peekSlot(k))}</span>
             </button>`).join("")}
         </div>
-        <p class="muted">「修正前版」「修正後版」には、本番とは別にチェックリスト・名簿・評価を保存できます。それぞれに修正前・修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p>
+        <p class="muted">「修正前版」「修正後版」には、本番とは別にチェックリスト・名簿・評価を保存できます。それぞれに修正前・修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p></details>
       </section>
 
       <section class="card">
-        <h3>オフライン動作</h3>
+        <h3>オフライン動作</h3><p class="muted">アプリ ${APP_VERSION}</p>
         <p data-offline>${offlineBadge(true)}</p>
         <p class="muted">「オフライン準備完了」と表示されてから機内モードにしてください。表示されない場合は、Wi-Fiにつないだままアプリを開き直してください。</p>
         <button class="btn" data-act="offline-check">再確認</button>
@@ -996,20 +1202,28 @@ function renderSettings() {
         <p class="muted">${slot === "main"
           ? "試験後、結果CSVを書き出して集約が済んだら、この端末から成績データを消去してください。"
           : `「${SLOTS[slot]}」のデータだけを消去します。本番のデータは消えません。`}</p>
-        <button class="btn danger" data-act="wipe">${slot === "main" ? "この端末の全データを消去" : `${SLOTS[slot]}のデータを消去`}</button>
+        <button class="btn danger" data-act="wipe">${slot === "main" ? "本番データを消去" : `${SLOTS[slot]}のデータを消去`}</button>
       </section>
 
+      <section class="card"><h3>バックアップと復元</h3>
+        <p>現在の「${SLOTS[slot]}」の名簿・評価途中の内容・チェックリスト・履歴をファイルに保存します。学生情報を含むため、成績と同じ場所で管理してください。</p>
+        <div class="btns"><button class="btn" data-act="backup">バックアップを保存</button><button class="btn" data-act="restore">バックアップから復元</button></div>
+      </section>
       <p class="muted center">データはこの端末内にのみ保存され、外部には送信されません。</p>
     </main>`;
 
   const on = (act, fn) => { const el = app.querySelector(`[data-act=${act}]`); if (el) el.onclick = fn; };
   on("back", () => go("home"));
   on("save", () => {
-    state.teacher = app.querySelector("#s-teacher").value.trim();
-    save();
-    go("home");
+    const name = app.querySelector("#s-teacher").value.trim();
+    if (!name) return alert("評価者（教員名）を入力してください。");
+    for (const ev of Object.values(state.evals)) if (ev.status !== "none" && !ev.teacher) ev.teacher = state.teacher;
+    state.teacher = name;
+    if (save()) go("home");
   });
   on("cl-import", importChecklist);
+  on("backup", exportBackup);
+  on("restore", restoreBackup);
   on("offline-check", () => checkOffline());
   app.querySelectorAll(".slot-btn[data-slot-go]").forEach((b) => b.addEventListener("click", () => switchSlot(b.dataset.slotGo)));
   app.querySelectorAll("[data-mstyle]").forEach((b) => b.addEventListener("click", () => {
@@ -1030,10 +1244,11 @@ function renderSettings() {
     render();
   });
   on("wipe", async () => {
-    if (!(await confirmDialog("全データを消去", "<p>名簿・評価結果・設定をすべて消去します。<b>元に戻せません。</b><br>結果CSVの書き出しは済んでいますか？</p>", "消去に進む", true))) return;
+    if (!(await confirmDialog(`${SLOTS[slot]}のデータを消去`, `<p>「${SLOTS[slot]}」の名簿・評価結果・設定だけを消去します。他の保存場所は残ります。<b>元に戻せません。</b><br>結果CSVの受領・集約、必要なバックアップの保存は済んでいますか？</p>`, "消去に進む", true))) return;
     if (!(await confirmDialog("最終確認", "<p>本当に消去しますか？</p>", "消去する", true))) return;
-    localStorage.removeItem(storeKey());
-    state = blankState();
+    try { localStorage.removeItem(storeKey()); } catch (e) { return alert("消去できませんでした：" + e.message); }
+    state = blankState(); loadError = "";
+    observedSignature = dataSignature(); persistence = { ok: true, at: null };
     go("home");
   });
 }
@@ -1047,6 +1262,7 @@ function parsePoints(label, ptS) {
   const t = ptS.replace(/\s+/g, " ").trim();
   if (t === "注意") return { label, points: "注意" };
   if (t.startsWith("測定")) {
+    if (!/^測定(?:\s+[\d.]+\s*(?:cm|ｃｍ)?\s*以上\s*[=＝:：]\s*\d+)+$/.test(t)) return null;
     const measure = [...t.matchAll(/([\d.]+)\s*(?:cm|ｃｍ)?\s*以上\s*[=＝:：]\s*(\d+)/g)]
       .map((m) => ({ min: Number(m[1]), points: Number(m[2]) }))
       .filter((x) => Number.isFinite(x.min) && Number.isFinite(x.points))
@@ -1054,7 +1270,7 @@ function parsePoints(label, ptS) {
     return measure.length ? { label, measure } : null;
   }
   const n = Number(t);
-  return t !== "" && Number.isFinite(n) ? { label, points: n } : null;
+  return t !== "" && Number.isFinite(n) && n >= 0 && n <= 100 ? { label, points: n } : null;
 }
 
 async function importChecklist() {
@@ -1075,7 +1291,7 @@ async function importChecklist() {
       else errors.push(`${i + 2}行目`);
       return;
     }
-    const max = Number(maxS);
+    const max = maxS === "" || maxS == null ? NaN : Number(maxS);
     const item = parsePoints(label, ptS);
     if (!name || !label || !Number.isFinite(max) || !item) {
       errors.push(`${i + 2}行目`);
@@ -1086,12 +1302,15 @@ async function importChecklist() {
       g = { category, name, max, items: [] };
       groups.push(g);
     }
+    if (g.max !== max) errors.push(`${i + 2}行目：同じ項目群の減点上限が不一致`);
     const imgs = imgS.split(/[|｜、]/).map((x) => x.trim()).filter(Boolean).map((x) => (x.includes("/") ? x : `img/${x}`));
     if (imgs.length) g.images = [...(g.images || []), ...imgs];
     g.items.push(item);
   });
   if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点（数値・注意・測定）, 補足画像 です。");
   if (!groups.length) return alert("項目を読み取れませんでした。");
+  try { validateChecklist({ title, passLine:pass, groups }); }
+  catch(e) { return alert("読み込んでいません：" + e.message); }
   const version = checklistVersion(rows);
   const ok = await confirmDialog("チェックリストの読み込み",
     `<p>「${esc(title)}」：${groups.length} 項目群・${groups.reduce((n, g) => n + g.items.length, 0)} チェック項目</p>
@@ -1167,6 +1386,10 @@ function render() {
 // 画面を描くたびに、検討用データの帯を先頭に付ける
 function decorate() {
   document.body.dataset.slot = slot;
+  if (!app.querySelector("[data-save-status]")) {
+    app.insertAdjacentHTML("afterbegin", `<div class="save-status" data-save-status aria-live="polite">${saveStatusHTML()}</div>`);
+    document.querySelectorAll("[data-retry-save]").forEach(el=>{el.onclick=()=>{save();render();};});
+  }
   if (slot !== "main" && !app.querySelector(".slot-banner")) {
     app.insertAdjacentHTML("afterbegin", slotBanner());
     const banner = app.querySelector(".slot-banner");

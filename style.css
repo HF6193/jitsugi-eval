@@ -635,3 +635,12 @@ main.eval.is-fit { max-width: none; padding: 6px 8px 4px; }
 .mctl .mbtn.over { min-width: 84px; font-weight: 700; }
 .mhint { font-size: 12px; }
 @media (max-width: 600px) { .mpad-row:first-child { grid-template-columns: repeat(6, 1fr); } .mctl .mbtn.over { min-width: 0; } }
+
+/* 保存状態と準備用の操作を採点の主画面から分離 */
+.save-status { padding: 8px 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 13px; border-bottom: 1px solid var(--line); }
+.roster-tools summary, .settings summary, .history summary { cursor: pointer; padding: 10px 0; font-weight: 700; }
+.roster-tools .btns { margin-top: 8px; }
+.history { padding: 12px; margin: 18px 0; border: 1px solid var(--line); border-radius: 8px; }
+.history p { margin: 4px 0; }
+.crit-tag { opacity: .8; }
+.on .crit-tag { opacity: 1; }
