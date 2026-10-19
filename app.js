@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v31";
+const APP_VERSION = "v32";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -847,7 +847,7 @@ function renderEval() {
   const next = nextPending(s.id);
 
   // 表示：一覧（1列・上から下）／詳細（大きな表示）
-  // 表示：標準（1列・上から下）／一覧（全項目をiPadの1画面に収める「一枚もの」）／大きく表示。一覧は打ち合わせ後に外すかもしれない（FIT_VIEW を false にすると消える）
+  // 表示：標準（1列・上から下）／大きく表示／一覧（全項目をiPadの1画面に収める「一枚もの」）。一覧は打ち合わせ後に外すかもしれない（FIT_VIEW を false にすると消える）
   const views = FIT_VIEW ? ["sheet", "fit", "detail"] : ["sheet", "detail"];
   const mode = views.includes(state.viewMode) ? state.viewMode : "sheet";
   const sheet = mode === "sheet";
@@ -958,7 +958,7 @@ function renderEval() {
       </div>
       <div class="head-actions">
         ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
-        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "標準"], ["fit", "一覧"], ["detail", "大きく表示"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
+        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "標準"], ["detail", "大きく表示"], ["fit", "一覧"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
