@@ -1,5 +1,5 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を上げる
-const VERSION = "v27";
+const VERSION = "v28";
 const CACHE = "jitsugi-eval-" + VERSION;
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "checklist.js", "manifest.webmanifest", "icon-180.png", "icon-512.png",
@@ -35,4 +35,4 @@ self.addEventListener("fetch", (e) => {
   })());
 });
 
-// v27: ファイル選択中のinputをDOMに保持する更新を含む。
+// v28: 確定と次への移動、準備確認、表示整理。

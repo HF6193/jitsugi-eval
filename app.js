@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v27";
+const APP_VERSION = "v28";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -42,6 +42,7 @@ let persistence = { ok: true, at: null, error: "" };
 let state = load();
 let observedSignature = dataSignature();
 let view = { name: "home", studentId: null };
+let homeFilter = "all";
 let rosterEdit = false; // 一覧の「並べ替え・欠席」モード
 
 function load() {
@@ -275,24 +276,31 @@ function isStandalone() {
 
 // CSV 解析（引用符・改行・BOM 対応）
 function parseCSV(text) {
-  text = text.replace(/^﻿/, "");
+  text = text.replace(/^\uFEFF/, "");
   const rows = [];
-  let row = [], cur = "", q = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (q) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { cur += '"'; i++; } else q = false;
-      } else cur += c;
-    } else if (c === '"') q = true;
-    else if (c === ",") { row.push(cur); cur = ""; }
-    else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(cur); rows.push(row); row = []; cur = "";
-    } else cur += c;
+  let row = [], cur = "", quoted = false, closed = false, line = 1, start = 1;
+  const field = () => { row.push(cur.trim()); cur = ""; closed = false; };
+  const record = () => { field(); if(row.some(v=>v!=="")) { Object.defineProperty(row,"sourceLine",{value:start}); rows.push(row); } row=[]; };
+  for (let i=0;i<text.length;i++) {
+    const c=text[i];
+    if (quoted) {
+      if(c==='"') { if(text[i+1]==='"') {cur+='"';i++;} else {quoted=false;closed=true;} }
+      else {cur+=c;if(c==='\n')line++;}
+    } else if(c==='"') {
+      if(cur.trim() || closed) throw new Error(`${line}行目：引用符の位置が不正です。`);
+      cur="";quoted=true;
+    } else if(c===',') field();
+    else if(c==='\n' || c==='\r') {
+      if(c==='\r' && text[i+1]==='\n')i++;
+      record();line++;start=line;
+    } else {
+      if(closed && c.trim()) throw new Error(`${line}行目：引用符の後に不要な文字があります。`);
+      if(!closed)cur+=c;
+    }
   }
-  if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
-  return rows.map((r) => r.map((v) => v.trim())).filter((r) => r.some((v) => v !== ""));
+  if(quoted)throw new Error(`${start}行目：引用符が閉じていません。`);
+  if(cur!=="" || row.length || closed)record();
+  return rows;
 }
 
 function toCSV(rows) {
@@ -440,11 +448,12 @@ function dataSignature() {
 }
 function saveStatusHTML() {
   if (loadError) return `<div class="warn-text">${esc(loadError)}</div>`;
-  const last = state.lastExport;
+  if (view.name === "eval") return `<span class="${persistence.ok ? "muted" : "warn-text"}">${persistence.ok ? "保存済み" : "未保存：端末への保存に失敗しています"}</span>${persistence.ok ? "" : '<button class="btn small" data-retry-save>再保存</button>'}`;
+  const last = view.name === "home" ? state.lastExport : null;
   const changed = last && last.revision !== (state.dataRevision || 0);
   return `<span class="${persistence.ok ? "muted" : "warn-text"}">${persistence.ok ? (state.savedAt ? `保存済み ${fmtDate(state.savedAt)}` : "入力すると自動保存します") : "未保存：端末への保存に失敗しています"}</span>
     ${persistence.ok ? "" : '<button class="btn small" data-retry-save>再保存</button>'}
-    <span class="${changed ? "warn-text" : "muted"}">${last ? (changed ? "書き出し後の変更あり：再書き出しが必要" : `書き出し操作 ${fmtDate(last.at)}（受領はMac側で確認）`) : "結果CSV：未書き出し"}</span>`;
+    ${view.name !== "home" ? "" : `<span class="${changed ? "warn-text" : "muted"}">${last ? (changed ? "書き出し後の変更あり：再書き出しが必要" : `書き出し操作 ${fmtDate(last.at)}（受領はMac側で確認）`) : "結果CSV：未書き出し"}</span>`}`;
 }
 function updateSaveBadge() {
   document.querySelectorAll("[data-save-status]").forEach(el=>{el.innerHTML=saveStatusHTML();});
@@ -465,7 +474,7 @@ function historyHTML(ev) {
       else if(!before ? after.checked[it.id] : !!before.checked[it.id]!==!!after.checked[it.id]) changes.push(`${it.label}：${before ? (before.checked[it.id]?"該当":"該当なし")+" → " : ""}${after.checked[it.id]?"該当":"該当なし"}`);
     }
     if(before && before.memo!==after.memo) changes.push(`メモ：${before.memo || "なし"} → ${after.memo || "なし"}`);
-    return `<div><b>${esc(fmtDate(h.at))} ${before?"再確定":"初回確定"}（操作：${esc(h.editor)}）</b><p>${before ? `${before.score} → ` : ""}${after.score}点</p><ul>${changes.map(x=>`<li>${esc(x)}</li>`).join("") || "<li>減点・測定値・メモの変更なし</li>"}</ul></div>`;
+    return `<div><b>${esc(fmtDate(h.at))} ${h.action === "cancelRevision" ? "修正取消" : (before?"再確定":"初回確定")}（操作：${esc(h.editor)}）</b><p>${before ? `${before.score} → ` : ""}${after.score}点</p><ul>${changes.map(x=>`<li>${esc(x)}</li>`).join("") || "<li>減点・測定値・メモの変更なし</li>"}</ul></div>`;
   }).join("")}</details>`;
 }
 async function exportBackup() {
@@ -501,9 +510,27 @@ async function restoreBackup() {
 
 // ---------- 画面: ホーム ----------
 
+function needsReview(s) {
+  const ev=getEvalIfAny(s.id);
+  return !s.absent && ev?.status === "final" && scoreOf(ev).unmeasured.length > 0;
+}
+function isComplete(s) { return !s.absent && getEvalIfAny(s.id)?.status === "final" && !needsReview(s); }
+function nextPending(id) {
+  const i=state.students.findIndex(s=>s.id===id);
+  return [...state.students.slice(i+1),...state.students.slice(0,i)].find(s=>!s.absent && !isComplete(s));
+}
+function preparationHTML() {
+  const missing=!state.teacher || !hasChecklist() || !state.students.length;
+  return `<details class="preparation" ${missing ? "open" : ""}><summary>開始前の準備確認${missing ? "（未準備あり）" : ""}</summary>
+    <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
+    <dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>
+    <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
+    <dt>担当学生</dt><dd>${state.students.length}名（予定人数と照合してください） <button class="btn small" data-prep-roster>名簿管理へ</button></dd>
+    <dt>オフライン</dt><dd data-offline>${offlineBadge()}</dd></dl></details>`;
+}
 function renderHome() {
   const cl = checklist();
-  const done = state.students.filter((s) => !s.absent && getEvalIfAny(s.id)?.status === "final").length;
+  const done = state.students.filter(isComplete).length;
   const banner = isStandalone() ? "" : `
     <div class="banner">
       <b>ホーム画面に追加して使ってください。</b>
@@ -512,13 +539,15 @@ function renderHome() {
 
   const n = state.students.length;
   const absentCount = state.students.filter((s) => s.absent).length;
-  const rows = state.students.map((s, i) => {
+  const visible = state.students.map((s,i)=>({s,i})).filter(({s})=>rosterEdit || homeFilter==="all" || (!s.absent && !isComplete(s)));
+  if(homeFilter==="pending" && !rosterEdit) visible.sort((a,b)=>(Number(needsReview(b.s))*2+Number(getEvalIfAny(b.s.id)?.status==="draft"))-(Number(needsReview(a.s))*2+Number(getEvalIfAny(a.s.id)?.status==="draft")) || a.i-b.i);
+  const rows = visible.map(({s, i}) => {
     const ev = getEvalIfAny(s.id);
-    const st = ev?.status || "none";
-    const r = !s.absent && ev && st !== "none" ? scoreOf(ev) : null;
+    const st = needsReview(s) ? "review" : (ev?.status || "none");
+    const r = !s.absent && ev && st !== "none" && st !== "review" ? scoreOf(ev) : null;
     const chip = s.absent
       ? `<span class="chip absent">欠席</span>`
-      : { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, final: `<span class="chip ok">確定</span>` }[st];
+      : { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, review: `<span class="chip warn">要確認・未測定</span>`, final: `<span class="chip ok">確定</span>` }[st];
     if (rosterEdit) {
       const id = esc(s.id);
       return `
@@ -557,6 +586,7 @@ function renderHome() {
       <button class="btn" data-act="settings">設定</button>
     </header>
     <main class="home">
+      ${preparationHTML()}
       ${hasChecklist() ? "" : `
         <div class="banner need">
           <b>チェックリストが読み込まれていません。</b>
@@ -577,6 +607,8 @@ function renderHome() {
           <div class="progress-text"><b>${done}</b> / ${n - absentCount} 名 確定${absentCount ? `<span class="muted">（欠席 ${absentCount}）</span>` : ""}</div>
         </div>` : ""}
         ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。</p>` : ""}
+        <div class="btns filter" role="group" aria-label="学生の表示"><button class="btn small ${homeFilter==="all"?"primary":""}" data-home-filter="all">全員</button><button class="btn small ${homeFilter==="pending"?"primary":""}" data-home-filter="pending">未確定（要確認を含む）</button></div>
+        ${!visible.length ? '<p>未確定・要確認の学生はいません。</p>' : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
           <div class="row head ${rosterEdit ? "edit" : ""}">
             <span class="row-no">#</span><span class="row-id">学籍番号</span><span class="row-name">氏名</span>
@@ -616,6 +648,9 @@ function renderHome() {
         !(await confirmDialog("欠席に変更", `<p>${esc(s.id)} ${esc(s.name)} の評価を集計対象から外します。入力内容は保持され、欠席を取り消すと戻ります。</p>`, "欠席にする"))) return;
     keepScroll(() => { s.absent = !s.absent; });
   }));
+  app.querySelectorAll("[data-home-filter]").forEach(b=>b.onclick=()=>{homeFilter=b.dataset.homeFilter;rosterEdit=false;renderHome();});
+  app.querySelectorAll("[data-prep-settings]").forEach(b=>b.onclick=()=>go("settings"));
+  app.querySelectorAll("[data-prep-roster]").forEach(b=>b.onclick=()=>{const el=app.querySelector("details.roster-tools");if(el){el.open=true;el.scrollIntoView({block:"center"});}});
   const re = app.querySelector("[data-act=roster-edit]");
   if (re) re.onclick = () => { rosterEdit = !rosterEdit; renderHome(); };
   app.querySelector("[data-act=settings]").onclick = () => go("settings");
@@ -633,11 +668,13 @@ function getEvalIfAny(id) {
 async function importRoster() {
   const file = await pickFile(".csv,text/csv,text/plain");
   if (!file) return;
-  const rows = parseCSV(await readTextFile(file));
-  const list = rows
-    .filter((r, i) => !(i === 0 && /^(学籍番号|番号|id)$/i.test(r[0])))
-    .map((r) => ({ id: r[0], name: r[1] || "" }))
-    .filter((s) => s.id);
+  let rows;
+  try { rows=parseCSV(await readTextFile(file)); }
+  catch(e){return alert("名簿は読み込んでいません："+e.message);}
+  const data=rows.filter((r,i)=>!(i===0 && /^(学籍番号|番号|id)$/i.test(r[0])));
+  const invalid=data.filter(r=>r.length!==2 || !validId(r[0]) || !r[1]?.trim());
+  if(invalid.length)return alert("名簿は読み込んでいません。学籍番号・氏名の2列を確認してください。\n"+invalid.map(r=>`${r.sourceLine}行目：${r.join(" ／ ")}`).join("\n"));
+  const list=data.map(r=>({id:r[0],name:r[1]}));
   if (!list.length) {
     alert("学生を読み取れませんでした。1列目に学籍番号、2列目に氏名のCSVを用意してください。");
     return;
@@ -756,6 +793,7 @@ function measureHTML(it, ev, locked) {
       </div>
       <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
   }
+  if(style === "select") return `<div class="mrow compact ${has ? (p ? "on" : "zero") : "unset"}"><div class="mcompact"><label for="measure-${it.id}" class="mlabel">${esc(it.label)}</label><div class="mctl select">${ctl.replace('<select ',`<select id="measure-${it.id}" aria-label="${esc(it.label)}" `)}</div><span class="spt">${has ? `減点 ${p}` : "未測定"}</span></div><div class="mguide">${esc(measureGuide(it))}</div></div>`;
   return `
     <div class="mrow ${has ? (p ? "on" : "zero") : "unset"} ${isCritical(it) ? "is-critical" : ""}">
       <div class="mhead">
@@ -806,7 +844,7 @@ function renderEval() {
   const locked = ev.status === "final";
   const r = scoreOf(ev);
   const idx = state.students.indexOf(s);
-  const next = [...state.students.slice(idx + 1), ...state.students.slice(0, idx)].find(x => !x.absent && getEvalIfAny(x.id)?.status !== "final");
+  const next = nextPending(s.id);
 
   // 表示：一覧（1列・上から下）／詳細（大きな表示）
   // 「1画面」（全項目を1画面に収める）は、ひとまず使わない。戻すときは FIT_VIEW を true にする
@@ -873,7 +911,7 @@ function renderEval() {
       <section class="sg ${d ? "has-ded" : ""}" data-c="${catIndex[g.category]}">
         <div class="sg-head">
           <span class="sg-name">${esc(g.name)}${reviewTag(g)}</span>
-          <span class="sg-ded ${d ? "has" : ""}">${d ? `−${d}` : "減点 0"}<span class="muted"> / 上限 ${g.max}</span></span>
+          <span class="sg-ded ${d ? "has" : ""}">${d ? `−${d} ` : ""}<span class="muted">上限 ${g.max}</span></span>
           ${imageButton(g)}
         </div>
         <div class="sg-items">${items}</div>
@@ -900,7 +938,7 @@ function renderEval() {
       <section class="group ${d ? "has-ded" : ""}" data-c="${catIndex[g.category]}">
         <div class="group-head">
           <span class="group-name">${esc(g.name)}${reviewTag(g)} ${imageButton(g)}</span>
-          <span class="group-ded ${d ? "has" : ""}">減点 ${d} <span class="muted">/ 上限 ${g.max}</span></span>
+          <span class="group-ded ${d ? "has" : ""}">${d ? `減点 ${d} ` : ""}<span class="muted">上限 ${g.max}</span></span>
         </div>
         ${items}
       </section>`;
@@ -924,14 +962,16 @@ function renderEval() {
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
-             ${next ? `<button class="btn small primary" data-act="next">次の未評価学生 ›</button>` : ""}`
+             ${next ? `<button class="btn small primary" data-act="next">次の未確定学生 ›</button>` : ""}`
           : `<button class="btn small primary" data-act="finalize">確定</button>`}
       </div>
     </header>
+    ${needsReview(s) ? `<div class="banner warn">旧データに未測定の項目があります。「修正」から測定値を入力して再確定してください。</div>` : ""}
     ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには「修正」を押してください。</div>` : ""}
     <main class="eval ${sheet ? "is-sheet" : ""} ${fit ? "is-fit" : ""}">
       <p class="note">該当する減点項目・注意項目を選んでください。できている項目にはチェックしません。</p>
       ${groups}
+      ${ev.revisionBase && !locked ? `<button class="btn" data-act="cancel-revision">修正を取り消して確定状態に戻す</button>` : ""}
       ${historyHTML(ev)}
       ${fit ? "" : `
       <h3 class="cat">メモ</h3>
@@ -939,7 +979,7 @@ function renderEval() {
       <div class="eval-actions">
         ${locked
           ? `<button class="btn" data-act="unlock">修正する</button>
-             ${next ? `<button class="btn primary" data-act="next">次の未評価学生へ ›</button>` : ""}`
+             ${next ? `<button class="btn primary" data-act="next">次の未確定学生へ ›</button>` : ""}`
           : `<button class="btn primary big" data-act="finalize">評価を確定する</button>`}
       </div>`}
     </main>`;
@@ -986,6 +1026,7 @@ function renderEval() {
   on("back", () => go("home"));
   on("next", () => go("eval", next.id));
   on("finalize", () => finalize(s, ev));
+  on("cancel-revision", () => cancelRevision(s,ev));
   app.querySelectorAll(".head-actions [data-slot-swap]").forEach((b) => (b.onclick = () => switchSlot(b.dataset.slotSwap, true)));
   app.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => {
     state.viewMode = b.dataset.view;
@@ -1040,6 +1081,18 @@ window.addEventListener("resize", () => {
   fitTimer = setTimeout(() => { if (view.name === "eval") fitToScreen(); }, 150);
 });
 
+async function cancelRevision(s, ev) {
+  if(!ev.revisionBase) return;
+  if(!(await confirmDialog("修正を取り消す","<p>修正中の内容を破棄し、修正前の確定状態に戻します。取消の記録は残ります。</p>","確定状態に戻す")))return;
+  const editing=JSON.parse(JSON.stringify(ev));
+  const before=evaluationSnapshot(ev),base=ev.revisionBase;
+  Object.assign(ev,JSON.parse(JSON.stringify(base)),{status:"final",revised:Math.max(0,(ev.revised||1)-1)});
+  delete ev.score;
+  delete ev.revisionBase;
+  ev.history=[...(editing.history||[]),{action:"cancelRevision",at:new Date().toISOString(),editor:state.teacher,before,after:evaluationSnapshot(ev)}];
+  if(!touch(ev)) {for(const k of Object.keys(ev))delete ev[k];Object.assign(ev,editing);observedSignature=dataSignature();}
+  renderEval();
+}
 async function finalize(s, ev) {
   if (!state.teacher) { alert("設定で評価者（教員名）を入力してください。"); return go("settings"); }
   const r = scoreOf(ev);
@@ -1056,9 +1109,10 @@ async function finalize(s, ev) {
       <div class="sum-score ${r.pass ? "" : "is-fail"}">${r.score} 点　${r.pass ? "合格" : "不合格"}</div>
       <div><span class="muted">減点合計</span>　${r.total} 点</div>
       ${r.deductions.length ? `<p class="muted">減点項目</p><ul>${r.deductions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : `<p>減点項目なし</p>`}
+      <p class="muted">測定値</p><ul>${checklist().groups.flatMap(g=>g.items).filter(isMeasure).map(it=>`<li>${esc(it.label)}：${esc(fmtMeasure(ev.measures[it.id]))}</li>`).join("") || "<li>測定項目なし</li>"}</ul>
       ${r.cautions.length ? `<p class="muted">注意</p><ul>${r.cautions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
       ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合は 0 を入力）</p>` : ""}
-    </div>`, "確定する");
+    </div>`, nextPending(s.id) ? "確定して次へ" : "確定して一覧へ");
   if (!ok) return;
   const before = JSON.parse(JSON.stringify(ev));
   ev.status = "final";
@@ -1075,8 +1129,8 @@ async function finalize(s, ev) {
     renderEval();
     return;
   }
-  renderEval();
-  window.scrollTo(0, 0);
+  const next=nextPending(s.id);
+  go(next ? "eval" : "home",next?.id || null);
 }
 
 // ---------- 書き出し ----------
@@ -1277,7 +1331,8 @@ async function importChecklist() {
   if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
   const file = await pickFile(".csv,text/csv,text/plain");
   if (!file) return;
-  const rows = parseCSV(await readTextFile(file)).filter((r) => r[0] !== "区分");
+  let rows;
+  try { rows=parseCSV(await readTextFile(file)).filter(r=>r[0]!=="区分"); } catch(e){return alert("読み込んでいません："+e.message);}
   const groups = [];
   const errors = [];
   let title = file.name.replace(/\.csv$/i, "").replace(/^チェックリスト_/, "");
@@ -1387,7 +1442,8 @@ function render() {
 function decorate() {
   document.body.dataset.slot = slot;
   if (!app.querySelector("[data-save-status]")) {
-    app.insertAdjacentHTML("afterbegin", `<div class="save-status" data-save-status aria-live="polite">${saveStatusHTML()}</div>`);
+    const host=view.name === "eval" ? (app.querySelector("header") || app) : app;
+    host.insertAdjacentHTML(view.name === "eval" ? "beforeend" : "afterbegin", `<div class="save-status" data-save-status aria-live="polite">${saveStatusHTML()}</div>`);
     document.querySelectorAll("[data-retry-save]").forEach(el=>{el.onclick=()=>{save();render();};});
   }
   if (slot !== "main" && !app.querySelector(".slot-banner")) {

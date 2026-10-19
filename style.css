@@ -644,3 +644,11 @@ main.eval.is-fit { max-width: none; padding: 6px 8px 4px; }
 .history p { margin: 4px 0; }
 .crit-tag { opacity: .8; }
 .on .crit-tag { opacity: 1; }
+
+/* v28: 準備確認と採点中の表示 */
+.preparation{padding:12px 16px;margin:0 0 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.preparation summary{font-weight:600;cursor:pointer}.preparation dl{display:grid;grid-template-columns:100px 1fr;gap:10px;margin-bottom:0}.preparation dt{color:var(--muted)}.preparation dd{margin:0}.filter{margin:8px 0 12px}
+.eval-top{flex-wrap:wrap;gap:8px 16px}.eval-top .save-status{margin-left:auto;padding:0;border:0;font-size:13px}.eval-top .save-status:has(.warn-text){flex-basis:100%;padding:6px;border:2px solid var(--warn);background:var(--warn-bg)}
+.mcompact{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mcompact .mlabel{min-width:130px}.mcompact .mctl{flex:none}.mrow.compact .mguide{margin-bottom:0}.mcompact .spt{white-space:nowrap}
+.row[data-st="review"] .row-status{font-size:12px}.row[data-st="review"] .chip{white-space:normal}
+@media(max-width:600px){.mcompact .mlabel{flex-basis:100%}.preparation dl{grid-template-columns:80px 1fr}}
