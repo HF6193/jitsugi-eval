@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v29";
+const APP_VERSION = "v30";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -466,7 +466,7 @@ function historyHTML(ev) {
   if (!ev.history?.length) return "";
   const items = checklist().groups.flatMap(g=>g.items);
   const display=(v)=>v == null ? "未測定" : fmtMeasure(v);
-  return `<details class="history"><summary>確定・修正履歴（${ev.history.length}件）</summary>${ev.history.map(h=>{
+  return `<details class="history" open><summary>確定・修正履歴（${ev.history.length}件）</summary>${ev.history.map(h=>{
     const changes=[];
     const before=h.before, after=h.after;
     for(const it of items) {
@@ -521,7 +521,7 @@ function nextPending(id) {
 }
 function preparationHTML() {
   const missing=!state.teacher || !hasChecklist() || !state.students.length;
-  return `<details class="preparation" ${missing ? "open" : ""}><summary>開始前の準備確認${missing ? "（未準備あり）" : ""}</summary>
+  return `<details class="preparation" open><summary>開始前の準備確認${missing ? "（未準備あり）" : ""}</summary>
     <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
     <dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>
     <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
@@ -594,7 +594,7 @@ function renderHome() {
           <button class="btn primary small" data-act="load-checklist">チェックリストCSVを読み込む</button>
         </div>`}
       <div class="toolbar">
-        <details class="roster-tools" ${!n || rosterEdit ? "open" : ""}><summary>名簿管理</summary><div class="btns">
+        <details class="roster-tools" open><summary>名簿管理</summary><div class="btns">
         <button class="btn" data-act="import-roster">名簿CSVを読み込む</button>
         <button class="btn" data-act="add-student">学生を追加</button>
         ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席を終える" : "並べ替え・欠席"}</button>` : ""}</div></details>
@@ -1226,7 +1226,7 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <details><summary>測定値の入力方法（詳細設定）</summary><p class="muted">通常はプルダウンを使用します。打ち合わせ用に他の方法も残しています。</p>
+        <details open><summary>測定値の入力方法（詳細設定）</summary><p class="muted">通常はプルダウンを使用します。打ち合わせ用に他の方法も残しています。</p>
         <div class="seg" role="radiogroup">
           ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "select") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "select") === k}">${label}</button>`).join("")}
         </div>
@@ -1234,7 +1234,7 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <details><summary>練習・検討用データ</summary>
+        <details open><summary>練習・検討用データ</summary>
         <div class="slots">
           ${Object.entries(SLOTS).map(([k, label]) => `
             <button class="slot-btn ${k === slot ? "sel" : ""}" data-slot-go="${k}" ${k === slot ? "disabled" : ""}>
@@ -1471,3 +1471,8 @@ if ("serviceWorker" in navigator && location.protocol !== "file:") {
   navigator.serviceWorker.addEventListener("controllerchange", () => checkOffline());
 }
 checkOffline();
+
+// 折りたたみ欄は使わない：見出し（summary）を押しても閉じないようにする
+document.addEventListener("click", (e) => {
+  if (e.target.closest("summary")) e.preventDefault();
+}, true);
