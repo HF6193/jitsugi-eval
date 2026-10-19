@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v30";
+const APP_VERSION = "v31";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -847,7 +847,7 @@ function renderEval() {
   const next = nextPending(s.id);
 
   // 表示：一覧（1列・上から下）／詳細（大きな表示）
-  // 「1画面」（全項目を1画面に収める）は、ひとまず使わない。戻すときは FIT_VIEW を true にする
+  // 表示：標準（1列・上から下）／一覧（全項目をiPadの1画面に収める「一枚もの」）／大きく表示。一覧は打ち合わせ後に外すかもしれない（FIT_VIEW を false にすると消える）
   const views = FIT_VIEW ? ["sheet", "fit", "detail"] : ["sheet", "detail"];
   const mode = views.includes(state.viewMode) ? state.viewMode : "sheet";
   const sheet = mode === "sheet";
@@ -958,7 +958,7 @@ function renderEval() {
       </div>
       <div class="head-actions">
         ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
-        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "一覧"], ["fit", "1画面"], ["detail", "大きく表示"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
+        <span class="viewseg" role="group" aria-label="表示">${[["sheet", "標準"], ["fit", "一覧"], ["detail", "大きく表示"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
           ? `<button class="btn small" data-act="unlock">修正</button>
@@ -969,10 +969,10 @@ function renderEval() {
     ${needsReview(s) ? `<div class="banner warn">旧データに未測定の項目があります。「修正」から測定値を入力して再確定してください。</div>` : ""}
     ${locked ? `<div class="banner ok">確定済みです（${fmtDate(ev.finalizedAt)}）。修正するには「修正」を押してください。</div>` : ""}
     <main class="eval ${sheet ? "is-sheet" : ""} ${fit ? "is-fit" : ""}">
-      <p class="note">該当する減点項目・注意項目を選んでください。できている項目にはチェックしません。</p>
+      ${fit ? "" : `<p class="note">該当する減点項目・注意項目を選んでください。できている項目にはチェックしません。</p>`}
       ${groups}
       ${ev.revisionBase && !locked ? `<button class="btn" data-act="cancel-revision">修正を取り消して確定状態に戻す</button>` : ""}
-      ${historyHTML(ev)}
+      ${fit ? "" : historyHTML(ev)}
       ${fit ? "" : `
       <h3 class="cat">メモ</h3>
       <textarea id="memo" rows="3" placeholder="特記事項（任意）" ${locked ? "disabled" : ""}>${esc(ev.memo)}</textarea>
@@ -1059,7 +1059,7 @@ function renderEval() {
   if (fit) fitToScreen();
 }
 
-const FIT_VIEW = false;
+const FIT_VIEW = true;
 
 // 1画面表示：はみ出さなくなるまで文字を小さくする（段数は画面の幅で決める）
 function fitToScreen() {

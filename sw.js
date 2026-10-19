@@ -1,5 +1,5 @@
 // オフライン用キャッシュ。アプリを更新したら VERSION を上げる
-const VERSION = "v30";
+const VERSION = "v31";
 const CACHE = "jitsugi-eval-" + VERSION;
 const ASSETS = [
   "./", "index.html", "style.css", "app.js", "checklist.js", "manifest.webmanifest", "icon-180.png", "icon-512.png",
