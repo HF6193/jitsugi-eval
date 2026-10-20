@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v32";
+const APP_VERSION = "v33";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -729,13 +729,6 @@ async function addStudent() {
 
 // ---------- 部品: 測定値の入力・補足画像 ----------
 
-const MEASURE_STYLES = {
-  buttons: "数字ボタン",
-  select: "プルダウン",
-  stepper: "＋／−ボタン",
-  keypad: "テンキー入力",
-};
-
 // 測定値の範囲：0.0〜4.9cm は0.1cm刻み、5.0cm以上はまとめて「5.0cm以上」（値は5として保存）
 const MEASURE_MAX = 5;
 
@@ -753,57 +746,16 @@ function cmOptions(v, has) {
   return cmRange().map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${fmtMeasure(x)}</option>`).join("");
 }
 
+// 測定値の入力はプルダウンだけにする（2026-10-20）
 function measureHTML(it, ev, locked) {
   const v = ev.measures?.[it.id];
   const has = v != null;
   const p = has ? measureDeduction(it, v) : 0;
   const dis = locked ? "disabled" : "";
-  const style = MEASURE_STYLES[state.measureInput] ? state.measureInput : "select";
-  let ctl;
-  if (style === "select") {
-    ctl = `<select class="msel" data-mselect="${it.id}" ${dis}>
+  return `<div class="mrow compact ${has ? (p ? "on" : "zero") : "unset"}"><div class="mcompact"><label for="measure-${it.id}" class="mlabel">${esc(it.label)}</label><div class="mctl select"><select class="msel" id="measure-${it.id}" aria-label="${esc(it.label)}" data-mselect="${it.id}" ${dis}>
       <option value="" ${has ? "" : "selected"}>未測定</option>
       ${cmOptions(v, has)}
-    </select>`;
-  } else if (style === "stepper") {
-    ctl = `<button class="btn mstep" data-mid="${it.id}" data-mstep="-1" ${dis}>−1</button>
-      <button class="btn mstep" data-mid="${it.id}" data-mstep="-0.1" ${dis}>−0.1</button>
-      <span class="mnow">${has ? fmtMeasure(v) : "未測定"}</span>
-      <button class="btn mstep" data-mid="${it.id}" data-mstep="0.1" ${dis}>＋0.1</button>
-      <button class="btn mstep" data-mid="${it.id}" data-mstep="1" ${dis}>＋1</button>
-      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
-  } else if (style === "keypad") {
-    ctl = `<input class="minp" type="number" inputmode="decimal" min="0" max="${MEASURE_MAX}" step="0.1" placeholder="未測定"
-        data-minput="${it.id}" value="${has ? v.toFixed(1) : ""}" ${dis}> <span>cm${has && v >= MEASURE_MAX ? "以上" : ""}</span>
-      <span class="muted mhint">（5.0以上は5と入力）</span>
-      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
-  } else {
-    // 整数の部分と小数の部分を別々のボタンで選ぶ（例：「2」→「.5」で 2.5cm）
-    const over = has && v >= MEASURE_MAX;
-    const ip = has && !over ? Math.floor(v + 1e-9) : null;
-    const dp = has && !over ? Math.round((v - ip) * 10) : null;
-    const intBtns = [...Array(MEASURE_MAX).keys()].map((n) =>
-      `<button class="btn mbtn ${ip === n ? "sel" : ""}" data-mid="${it.id}" data-mv="${n + (dp ?? 0) / 10}" ${dis}>${n}</button>`).join("")
-      + `<button class="btn mbtn over ${over ? "sel" : ""}" data-mid="${it.id}" data-mv="${MEASURE_MAX}" ${dis}>${MEASURE_MAX.toFixed(1)}以上</button>`;
-    const decBtns = [...Array(10).keys()].map((d) =>
-      `<button class="btn mbtn dec ${dp === d ? "sel" : ""}" data-mid="${it.id}" data-mv="${(ip ?? 0) + d / 10}" ${dis || (over ? "disabled" : "")}>.${d}</button>`).join("");
-    ctl = `<div class="mpad">
-        <div class="mpad-row"><span class="mpad-l">cm</span>${intBtns}</div>
-        <div class="mpad-row"><span class="mpad-l">小数</span>${decBtns}</div>
-      </div>
-      <button class="btn small ghost" data-mid="${it.id}" data-mv="" ${dis}>クリア</button>`;
-  }
-  if(style === "select") return `<div class="mrow compact ${has ? (p ? "on" : "zero") : "unset"}"><div class="mcompact"><label for="measure-${it.id}" class="mlabel">${esc(it.label)}</label><div class="mctl select">${ctl.replace('<select ',`<select id="measure-${it.id}" aria-label="${esc(it.label)}" `)}</div><span class="spt">${has ? `減点 ${p}` : "未測定"}</span></div><div class="mguide">${esc(measureGuide(it))}</div></div>`;
-  return `
-    <div class="mrow ${has ? (p ? "on" : "zero") : "unset"} ${isCritical(it) ? "is-critical" : ""}">
-      <div class="mhead">
-        <span class="mlabel">${esc(it.label)}</span>
-        <span class="mval">${has ? fmtMeasure(v) : "未測定"}</span>
-        <span class="spt">${has ? (p ? `−${p}` : "0") : "—"}</span>
-      </div>
-      <div class="mguide">${esc(measureGuide(it))}</div>
-      <div class="mctl ${style}">${ctl}</div>
-    </div>`;
+    </select></div><span class="spt">${has ? `減点 ${p}` : "未測定"}</span></div><div class="mguide">${esc(measureGuide(it))}</div></div>`;
 }
 
 function imageButton(g) {
@@ -1003,19 +955,8 @@ function renderEval() {
     renderEval();
     window.scrollTo(0, y);
   };
-  app.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => {
-    setMeasure(b.dataset.mid, b.dataset.mv === "" ? null : Number(b.dataset.mv));
-  }));
-  app.querySelectorAll("[data-mstep]").forEach((b) => b.addEventListener("click", () => {
-    const cur = ev.measures?.[b.dataset.mid];
-    const step = Number(b.dataset.mstep);
-    setMeasure(b.dataset.mid, cur == null ? (step > 0 ? step : 0) : cur + step);
-  }));
   app.querySelectorAll("[data-mselect]").forEach((el) => el.addEventListener("change", () => {
     setMeasure(el.dataset.mselect, el.value === "" ? null : Number(el.value));
-  }));
-  app.querySelectorAll("[data-minput]").forEach((el) => el.addEventListener("change", () => {
-    setMeasure(el.dataset.minput, el.value.trim() === "" ? null : Number(el.value.replace(",", ".")));
   }));
   app.querySelectorAll("[data-img]").forEach((b) => b.addEventListener("click", () => showImages(b.dataset.img)));
 
@@ -1226,14 +1167,6 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <details open><summary>測定値の入力方法（詳細設定）</summary><p class="muted">通常はプルダウンを使用します。打ち合わせ用に他の方法も残しています。</p>
-        <div class="seg" role="radiogroup">
-          ${Object.entries(MEASURE_STYLES).map(([k, label]) => `<button class="btn ${(state.measureInput || "select") === k ? "primary" : ""}" data-mstyle="${k}" role="radio" aria-checked="${(state.measureInput || "select") === k}">${label}</button>`).join("")}
-        </div>
-        <p class="muted">評価画面で測定値を入力する方法を選びます。いつでも切り替えられ、入力済みの値は消えません。</p></details>
-      </section>
-
-      <section class="card">
         <details open><summary>練習・検討用データ</summary>
         <div class="slots">
           ${Object.entries(SLOTS).map(([k, label]) => `
@@ -1280,16 +1213,6 @@ function renderSettings() {
   on("restore", restoreBackup);
   on("offline-check", () => checkOffline());
   app.querySelectorAll(".slot-btn[data-slot-go]").forEach((b) => b.addEventListener("click", () => switchSlot(b.dataset.slotGo)));
-  app.querySelectorAll("[data-mstyle]").forEach((b) => b.addEventListener("click", () => {
-    state.measureInput = b.dataset.mstyle;
-    save();
-    // 入力中の欄を消さないよう、ボタンの見た目だけ切り替える
-    app.querySelectorAll("[data-mstyle]").forEach((x) => {
-      const sel = x.dataset.mstyle === state.measureInput;
-      x.classList.toggle("primary", sel);
-      x.setAttribute("aria-checked", sel);
-    });
-  }));
   on("cl-reset", async () => {
     if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
     if (!(await confirmDialog("チェックリストの解除", "<p>読み込んだチェックリストを解除します。</p>"))) return;
