@@ -4,14 +4,18 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v33";
+const APP_VERSION = "v34";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
 const SLOTS = { main: "本番", review1: "修正前版", review2: "修正後版" };
+// チェックリストは1つだけ使う（2026-10-20）。修正前版・修正後版への切り替えは出さず、常に本番を使う。
+// 切り替えを戻すときは true にする（修正前版・修正後版のデータは消さずに残してある）。
+const REVIEW_SLOTS = false;
 let slot = readSlot();
 
 function readSlot() {
+  if (!REVIEW_SLOTS) return "main";
   try {
     const v = localStorage.getItem(SLOT_KEY);
     return SLOTS[v] ? v : "main";
@@ -523,7 +527,7 @@ function preparationHTML() {
   const missing=!state.teacher || !hasChecklist() || !state.students.length;
   return `<details class="preparation" open><summary>開始前の準備確認${missing ? "（未準備あり）" : ""}</summary>
     <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
-    <dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>
+    ${REVIEW_SLOTS ? `<dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>` : ""}
     <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
     <dt>担当学生</dt><dd>${state.students.length}名（予定人数と照合してください） <button class="btn small" data-prep-roster>名簿管理へ</button></dd>
     <dt>オフライン</dt><dd data-offline>${offlineBadge()}</dd></dl></details>`;
@@ -1166,7 +1170,7 @@ function renderSettings() {
         <p class="muted">試験名・合格点はチェックリストCSVで決まります。評価データがある間は差し替えできません。</p>
       </section>
 
-      <section class="card">
+      ${REVIEW_SLOTS ? `<section class="card">
         <details open><summary>練習・検討用データ</summary>
         <div class="slots">
           ${Object.entries(SLOTS).map(([k, label]) => `
@@ -1175,7 +1179,7 @@ function renderSettings() {
             </button>`).join("")}
         </div>
         <p class="muted">「修正前版」「修正後版」には、本番とは別にチェックリスト・名簿・評価を保存できます。それぞれに修正前・修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p></details>
-      </section>
+      </section>` : ""}
 
       <section class="card">
         <h3>オフライン動作</h3><p class="muted">アプリ ${APP_VERSION}</p>
