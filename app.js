@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v34";
+const APP_VERSION = "v35";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -178,22 +178,34 @@ function isCaution(it) {
   return it.points === "注意";
 }
 
-// 測定値（cm）を入力する項目か。measure = [{ min: 1, points: 20 }, ...]
+// 入力が必要な項目か：測定（cm。measure = [{ min: 1, points: 20 }, ...]）または択一（区分を選ぶ。choices = [{ label, points }, ...]）
 function isMeasure(it) {
-  return Array.isArray(it.measure);
+  return Array.isArray(it.measure) || Array.isArray(it.choices);
+}
+// 択一（例：1.9cm以下／2.0〜2.9cm／3.0cm以上 から1つ選ぶ）。選んだ区分の文言をそのまま保存する
+function isChoice(it) {
+  return Array.isArray(it.choices);
+}
+// その項目の入力値として正しいか（測定は0〜5の0.1刻み、択一は選択肢のどれか）
+function validValue(it, v) {
+  if (isChoice(it)) return typeof v === "string" && it.choices.some((c) => c.label === v);
+  return validMeasure(v);
 }
 
 function measureDeduction(it, v) {
+  if (isChoice(it)) return it.choices.find((c) => c.label === v)?.points ?? 0;
   let p = 0;
   for (const s of it.measure) if (v >= s.min) p = Math.max(p, s.points);
   return p;
 }
 
 function measureGuide(it) {
+  if (isChoice(it)) return it.choices.map((c) => `${c.label} ${c.points ? `−${c.points}` : "0"}`).join("／");
   return it.measure.map((s) => `${s.min}cm以上 −${s.points}`).join("／");
 }
 
 function maxPoints(it) {
+  if (isChoice(it)) return Math.max(0, ...it.choices.map((c) => c.points));
   if (isMeasure(it)) return Math.max(0, ...it.measure.map((s) => s.points));
   return typeof it.points === "number" ? it.points : 0;
 }
@@ -221,7 +233,7 @@ function scoreOf(ev) {
     for (const it of g.items) {
       if (isMeasure(it)) {
         const v = measures[it.id];
-        if (!validMeasure(v)) { unmeasured.push(it.label); continue; }
+        if (!validValue(it, v)) { unmeasured.push(it.label); continue; }
         const p = measureDeduction(it, v);
         if (p) { sum += p; labels.push(`${it.label} ${fmtMeasure(v)}(−${p})`); }
         continue;
@@ -406,7 +418,14 @@ function validateChecklist(cl) {
     if (g.images && (!Array.isArray(g.images) || g.images.some(src => typeof src !== "string" || !/^img\/[\w.-]+\.(svg|png|jpe?g|webp)$/i.test(src)))) throw new Error("補足画像の指定が不正です。");
     for (const it of g.items) {
       if (!plainObject(it) || typeof it.label !== "string" || !it.label.trim()) throw new Error("チェック内容が空欄です。");
-      if (Array.isArray(it.measure)) {
+      if (Array.isArray(it.choices)) {
+        const labels = new Set();
+        if (!it.choices.length) throw new Error("択一の選択肢がありません。");
+        for (const c of it.choices) {
+          if (!plainObject(c) || typeof c.label !== "string" || !c.label.trim() || labels.has(c.label) || !Number.isFinite(c.points) || c.points < 0 || c.points > 100) throw new Error(`択一の選択肢が不正です：${it.label}`);
+          labels.add(c.label);
+        }
+      } else if (Array.isArray(it.measure)) {
         const mins = new Set();
         if (!it.measure.length) throw new Error("測定基準がありません。");
         let last = -1;
@@ -430,7 +449,7 @@ function validateState(d) {
   function snapshot(v) {
     if (!plainObject(v) || !plainObject(v.checked) || (v.measures != null && !plainObject(v.measures)) || (v.memo != null && typeof v.memo !== "string")) throw new Error("評価内容の形式が不正です。");
     for (const [id, checked] of Object.entries(v.checked)) if (!items.has(id) || typeof checked !== "boolean" || isMeasure(items.get(id))) throw new Error("減点項目がチェックリストと一致しません。");
-    for (const [id, value] of Object.entries(v.measures || {})) if (!items.has(id) || !isMeasure(items.get(id)) || !validMeasure(value)) throw new Error("測定値が不正です。");
+    for (const [id, value] of Object.entries(v.measures || {})) if (!items.has(id) || !isMeasure(items.get(id)) || !validValue(items.get(id), value)) throw new Error("測定値が不正です。");
   }
   for (const [id, ev] of Object.entries(d.evals)) {
     if (!ids.has(id) || !["none","draft","final"].includes(ev?.status)) throw new Error("評価と名簿の対応が不正です。");
@@ -743,10 +762,13 @@ function cmRange() {
 }
 
 function fmtMeasure(v) {
+  if (typeof v === "string") return v; // 択一は区分の文言そのまま
   return v >= MEASURE_MAX ? `${MEASURE_MAX.toFixed(1)}cm以上` : `${v.toFixed(1)}cm`;
 }
 
-function cmOptions(v, has) {
+// プルダウンの選択肢：測定は 0.0〜5.0cm以上、択一はチェックリストの区分
+function measureOptions(it, v, has) {
+  if (isChoice(it)) return it.choices.map((c) => `<option value="${esc(c.label)}" ${has && c.label === v ? "selected" : ""}>${esc(c.label)}</option>`).join("");
   return cmRange().map((x) => `<option value="${x}" ${has && x === v ? "selected" : ""}>${fmtMeasure(x)}</option>`).join("");
 }
 
@@ -758,7 +780,7 @@ function measureHTML(it, ev, locked) {
   const dis = locked ? "disabled" : "";
   return `<div class="mrow compact ${has ? (p ? "on" : "zero") : "unset"}"><div class="mcompact"><label for="measure-${it.id}" class="mlabel">${esc(it.label)}</label><div class="mctl select"><select class="msel" id="measure-${it.id}" aria-label="${esc(it.label)}" data-mselect="${it.id}" ${dis}>
       <option value="" ${has ? "" : "selected"}>未測定</option>
-      ${cmOptions(v, has)}
+      ${measureOptions(it, v, has)}
     </select></div><span class="spt">${has ? `減点 ${p}` : "未測定"}</span></div><div class="mguide">${esc(measureGuide(it))}</div></div>`;
 }
 
@@ -830,7 +852,7 @@ function renderEval() {
       <span class="fl">${esc(it.label)}</span>
       <select class="fsel" data-mselect="${it.id}" ${dis}>
         <option value="" ${has ? "" : "selected"}>未測定</option>
-        ${cmOptions(v, has)}
+        ${measureOptions(it, v, has)}
       </select>
       <span class="fp">${has ? (p ? `−${p}` : "0") : "—"}</span></div>`;
   };
@@ -949,18 +971,25 @@ function renderEval() {
     renderEval();
     window.scrollTo(0, y);
   }));
-  const setMeasure = (id, v) => {
+  const setMeasure = (id, raw) => {
     if (locked) return;
     ev.measures = ev.measures || {};
-    if (v == null || Number.isNaN(v)) delete ev.measures[id];
-    else ev.measures[id] = Math.min(MEASURE_MAX, Math.round(Math.max(0, v) * 10) / 10);
+    const it = checklist().groups.flatMap((g) => g.items).find((x) => x.id === id);
+    if (it && isChoice(it)) {
+      if (raw == null || raw === "" || !validValue(it, raw)) delete ev.measures[id];
+      else ev.measures[id] = raw;
+    } else {
+      const v = raw == null || raw === "" ? null : Number(raw);
+      if (v == null || Number.isNaN(v)) delete ev.measures[id];
+      else ev.measures[id] = Math.min(MEASURE_MAX, Math.round(Math.max(0, v) * 10) / 10);
+    }
     touch(ev);
     const y = window.scrollY;
     renderEval();
     window.scrollTo(0, y);
   };
   app.querySelectorAll("[data-mselect]").forEach((el) => el.addEventListener("change", () => {
-    setMeasure(el.dataset.mselect, el.value === "" ? null : Number(el.value));
+    setMeasure(el.dataset.mselect, el.value);
   }));
   app.querySelectorAll("[data-img]").forEach((b) => b.addEventListener("click", () => showImages(b.dataset.img)));
 
@@ -1042,7 +1071,7 @@ async function finalize(s, ev) {
   if (!state.teacher) { alert("設定で評価者（教員名）を入力してください。"); return go("settings"); }
   const r = scoreOf(ev);
   if (r.unmeasured.length) {
-    alert("未測定のため確定できません。シワがない場合は0.0cmを選んでください。\n" + r.unmeasured.join("、"));
+    alert("未入力のため確定できません。シワがない場合も、該当する区分（1.9cm以下 など）を選んでください。\n" + r.unmeasured.join("、"));
     const target = app.querySelector(".mrow.unset");
     target?.scrollIntoView({ block: "center" });
     target?.querySelector("select, input, button")?.focus();
@@ -1056,7 +1085,7 @@ async function finalize(s, ev) {
       ${r.deductions.length ? `<p class="muted">減点項目</p><ul>${r.deductions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : `<p>減点項目なし</p>`}
       <p class="muted">測定値</p><ul>${checklist().groups.flatMap(g=>g.items).filter(isMeasure).map(it=>`<li>${esc(it.label)}：${esc(fmtMeasure(ev.measures[it.id]))}</li>`).join("") || "<li>測定項目なし</li>"}</ul>
       ${r.cautions.length ? `<p class="muted">注意</p><ul>${r.cautions.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>` : ""}
-      ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合は 0 を入力）</p>` : ""}
+      ${r.unmeasured.length ? `<p class="warn-text">未測定：${r.unmeasured.map(esc).join("、")}（シワがない場合も区分を選ぶ）</p>` : ""}
     </div>`, nextPending(s.id) ? "確定して次へ" : "確定して一覧へ");
   if (!ok) return;
   const before = JSON.parse(JSON.stringify(ev));
@@ -1103,7 +1132,7 @@ async function exportResults() {
   const header = [
     "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ", "修正履歴", "合格点",
     ...cl.groups.map((g) => `【減点】${g.name}`),
-    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isMeasure(it) ? "（cm・5は5.0以上）" : ""}`),
+    ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isChoice(it) ? "（択一）" : isMeasure(it) ? "（cm・5は5.0以上）" : ""}`),
   ];
   const rows = state.students.map((s) => {
     // 欠席の学生は、途中まで入力があっても結果を出さない
@@ -1238,10 +1267,15 @@ function hasEvalData() {
   return Object.values(state.evals).some((e) => e.status !== "none");
 }
 
-// 減点欄の解釈：数値 / 「注意」 / 「測定 1以上=20 2以上=41」
+// 減点欄の解釈：数値 / 「注意」 / 「測定 1以上=20 2以上=41」 / 「択一 1.9cm以下=0 2.0〜2.9cm=20 3.0cm以上=41」
 function parsePoints(label, ptS) {
   const t = ptS.replace(/\s+/g, " ").trim();
   if (t === "注意") return { label, points: "注意" };
+  if (t.startsWith("択一")) {
+    if (!/^択一(?:\s+[^\s=＝:：]+\s*[=＝:：]\s*\d+)+$/.test(t)) return null;
+    const choices = [...t.matchAll(/([^\s=＝:：]+)\s*[=＝:：]\s*(\d+)/g)].map((m) => ({ label: m[1], points: Number(m[2]) }));
+    return choices.length && new Set(choices.map((c) => c.label)).size === choices.length ? { label, choices } : null;
+  }
   if (t.startsWith("測定")) {
     if (!/^測定(?:\s+[\d.]+\s*(?:cm|ｃｍ)?\s*以上\s*[=＝:：]\s*\d+)+$/.test(t)) return null;
     const measure = [...t.matchAll(/([\d.]+)\s*(?:cm|ｃｍ)?\s*以上\s*[=＝:：]\s*(\d+)/g)]
@@ -1289,7 +1323,7 @@ async function importChecklist() {
     if (imgs.length) g.images = [...(g.images || []), ...imgs];
     g.items.push(item);
   });
-  if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点（数値・注意・測定）, 補足画像 です。");
+  if (errors.length) return alert("読み取れない行があります：" + errors.join("、") + "\n列は 区分, 実施項目, 減点上限, チェック内容, 減点（数値・注意・測定・択一）, 補足画像 です。");
   if (!groups.length) return alert("項目を読み取れませんでした。");
   try { validateChecklist({ title, passLine:pass, groups }); }
   catch(e) { return alert("読み込んでいません：" + e.message); }
