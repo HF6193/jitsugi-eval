@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v35";
+const APP_VERSION = "v36";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -32,11 +32,15 @@ const dlg = document.getElementById("dlg");
 
 // ---------- 状態 ----------
 
+// 名簿の時間帯：名簿CSVの「午前」「午後」だけの行から下の学生をその時間帯とし、一覧に見出しを出す
+// （保存データの読み込み時の検証で使うため、load() より前に定義する）
+const SESSIONS = ["午前", "午後"];
+
 function blankState() {
   return {
     teacher: "",
     checklist: null, // null のときは checklist.js の既定を使う
-    students: [], // { id, name }
+    students: [], // { id, name, session?: "午前"|"午後", absent? }
     evals: {}, // studentId -> { checked: {itemId: true}, measures: {itemId: cm}, memo, status, updatedAt, finalizedAt, revised }
   };
 }
@@ -402,6 +406,20 @@ function confirmDialog(title, body, okLabel = "OK", danger = false) {
 }
 
 // 保存・復元は採点データを変換せず、旧版の項目IDを保持する。
+// 名簿の時間帯（SESSIONS は先頭で定義）
+function sessionRank(s) { return SESSIONS.indexOf(s.session) + 1; }
+function hasSessions() { return state.students.some((s) => s.session); }
+// 並べ替えた学生は、移動先の前の学生（先頭なら次の学生）と同じ時間帯にする
+function adoptSession(i) {
+  if (!hasSessions()) return;
+  const s = state.students[i], near = state.students[i - 1] || state.students[i + 1];
+  if (near?.session) s.session = near.session; else delete s.session;
+}
+function sessionSummary() {
+  if (!hasSessions()) return "";
+  return "（" + SESSIONS.map((t) => [t, state.students.filter((s) => s.session === t).length]).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join("・") + "）";
+}
+
 function validId(id) {
   return typeof id === "string" && !!id.trim() && !["__proto__", "constructor", "prototype"].includes(id);
 }
@@ -442,7 +460,7 @@ function validateState(d) {
   if (d.checklist) validateChecklist(d.checklist);
   const ids = new Set();
   for (const st of d.students) {
-    if (!plainObject(st) || !validId(st.id) || typeof st.name !== "string" || ids.has(st.id) || (st.absent !== undefined && typeof st.absent !== "boolean")) throw new Error("名簿の学籍番号・氏名・重複を確認してください。");
+    if (!plainObject(st) || !validId(st.id) || typeof st.name !== "string" || ids.has(st.id) || (st.absent !== undefined && typeof st.absent !== "boolean") || (st.session !== undefined && !SESSIONS.includes(st.session))) throw new Error("名簿の学籍番号・氏名・重複を確認してください。");
     ids.add(st.id);
   }
   const items = new Map(withIds(d.checklist || {groups:[]}).groups.flatMap(g => g.items.map(it => [it.id,it])));
@@ -548,7 +566,7 @@ function preparationHTML() {
     <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
     ${REVIEW_SLOTS ? `<dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>` : ""}
     <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
-    <dt>担当学生</dt><dd>${state.students.length}名（予定人数と照合してください） <button class="btn small" data-prep-roster>名簿管理へ</button></dd>
+    <dt>担当学生</dt><dd>${state.students.length}名${sessionSummary()}（予定人数と照合してください） <button class="btn small" data-prep-roster>名簿管理へ</button></dd>
     <dt>オフライン</dt><dd data-offline>${offlineBadge()}</dd></dl></details>`;
 }
 function renderHome() {
@@ -563,8 +581,14 @@ function renderHome() {
   const n = state.students.length;
   const absentCount = state.students.filter((s) => s.absent).length;
   const visible = state.students.map((s,i)=>({s,i})).filter(({s})=>rosterEdit || homeFilter==="all" || (!s.absent && !isComplete(s)));
-  if(homeFilter==="pending" && !rosterEdit) visible.sort((a,b)=>(Number(needsReview(b.s))*2+Number(getEvalIfAny(b.s.id)?.status==="draft"))-(Number(needsReview(a.s))*2+Number(getEvalIfAny(a.s.id)?.status==="draft")) || a.i-b.i);
-  const rows = visible.map(({s, i}) => {
+  if(homeFilter==="pending" && !rosterEdit) visible.sort((a,b)=>sessionRank(a.s)-sessionRank(b.s) || (Number(needsReview(b.s))*2+Number(getEvalIfAny(b.s.id)?.status==="draft"))-(Number(needsReview(a.s))*2+Number(getEvalIfAny(a.s.id)?.status==="draft")) || a.i-b.i);
+  const sessionHead = (s, prev) => {
+    if (!s.session || s.session === prev?.session) return "";
+    const g = state.students.filter((x) => x.session === s.session);
+    return `<div class="row session"><span>${esc(s.session)}</span><span class="cnt">確定 ${g.filter(isComplete).length} / ${g.filter((x) => !x.absent).length} 名${g.some((x) => x.absent) ? `（欠席 ${g.filter((x) => x.absent).length}）` : ""}</span></div>`;
+  };
+  const rows = visible.map(({s, i}, k) => sessionHead(s, visible[k - 1]?.s) + rowHTML(s, i)).join("");
+  function rowHTML(s, i) {
     const ev = getEvalIfAny(s.id);
     const st = needsReview(s) ? "review" : (ev?.status || "none");
     const r = !s.absent && ev && st !== "none" && st !== "review" ? scoreOf(ev) : null;
@@ -596,7 +620,7 @@ function renderHome() {
         <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? `${r.score}${st === "final" ? "" : "（暫定）"}` : "—"}</span>
         <span class="row-pass">${r && st === "final" ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
       </button>`;
-  }).join("");
+  }
 
   app.innerHTML = `
     ${banner}
@@ -629,7 +653,7 @@ function renderHome() {
           <div class="progress-bar"><span style="width:${n - absentCount ? (done / (n - absentCount)) * 100 : 0}%"></span></div>
           <div class="progress-text"><b>${done}</b> / ${n - absentCount} 名 確定${absentCount ? `<span class="muted">（欠席 ${absentCount}）</span>` : ""}</div>
         </div>` : ""}
-        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。</p>` : ""}
+        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。${hasSessions() ? "午前・午後の境目をまたいで動かすと、移動先の時間帯に入ります。" : ""}</p>` : ""}
         <div class="btns filter" role="group" aria-label="学生の表示"><button class="btn small ${homeFilter==="all"?"primary":""}" data-home-filter="all">全員</button><button class="btn small ${homeFilter==="pending"?"primary":""}" data-home-filter="pending">未確定（要確認を含む）</button></div>
         ${!visible.length ? '<p>未確定・要確認の学生はいません。</p>' : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
@@ -664,6 +688,7 @@ function renderHome() {
     const [s] = list.splice(i, 1);
     const to = { up: i - 1, down: i + 1, last: list.length }[b.dataset.move];
     list.splice(Math.max(0, Math.min(to, list.length)), 0, s);
+    adoptSession(list.indexOf(s));
   })));
   app.querySelectorAll("[data-absent]").forEach((b) => b.addEventListener("click", async () => {
     const s = state.students[at(b.dataset.absent)];
@@ -695,9 +720,13 @@ async function importRoster() {
   try { rows=parseCSV(await readTextFile(file)); }
   catch(e){return alert("名簿は読み込んでいません："+e.message);}
   const data=rows.filter((r,i)=>!(i===0 && /^(学籍番号|番号|id)$/i.test(r[0])));
-  const invalid=data.filter(r=>r.length!==2 || !validId(r[0]) || !r[1]?.trim());
-  if(invalid.length)return alert("名簿は読み込んでいません。学籍番号・氏名の2列を確認してください。\n"+invalid.map(r=>`${r.sourceLine}行目：${r.join(" ／ ")}`).join("\n"));
-  const list=data.map(r=>({id:r[0],name:r[1]}));
+  const isHead=r=>SESSIONS.includes(r[0]) && r.slice(1).every(v=>!v);
+  const invalid=data.filter(r=>!isHead(r) && (r.length!==2 || !validId(r[0]) || !r[1]?.trim()));
+  if(invalid.length)return alert("名簿は読み込んでいません。学籍番号・氏名の2列を確認してください（午前・午後の区切りは、1列目に「午前」「午後」だけを書いた行）。\n"+invalid.map(r=>`${r.sourceLine}行目：${r.join(" ／ ")}`).join("\n"));
+  let session="";
+  const list=[];
+  for(const r of data){ if(isHead(r)) session=r[0]; else list.push(session?{id:r[0],name:r[1],session}:{id:r[0],name:r[1]}); }
+  const withSessions=list.some(s=>s.session);
   if (!list.length) {
     alert("学生を読み取れませんでした。1列目に学籍番号、2列目に氏名のCSVを用意してください。");
     return;
@@ -716,12 +745,23 @@ async function importRoster() {
   const existing = new Set(state.students.map((s) => s.id));
   const added = list.filter((s) => !existing.has(s.id));
   const dup = list.length - added.length;
+  // 区切りのある名簿では、登録済みの学生の時間帯もCSVに合わせる
+  const resession = withSessions ? list.filter((s) => existing.has(s.id) && (state.students.find((x) => x.id === s.id).session || "") !== (s.session || "")) : [];
   const ok = await confirmDialog("名簿の読み込み",
-    `<p>${added.length} 名を追加します。${dup ? `（登録済みの ${dup} 名は変更しません）` : ""}</p>
-     <ul class="preview">${added.slice(0, 30).map((s) => `<li>${esc(s.id)}　${esc(s.name)}</li>`).join("")}${added.length > 30 ? "<li>…</li>" : ""}</ul>`,
+    `<p>${added.length} 名を追加します。${dup ? (resession.length ? `（登録済みの ${dup} 名のうち、${resession.length} 名の時間帯を変更します。評価は変わりません）` : `（登録済みの ${dup} 名は変更しません）`) : ""}</p>
+     ${withSessions ? `<p>時間帯：${SESSIONS.map((t) => `${t} ${list.filter((s) => s.session === t).length} 名`).join("・")}${list.some((s) => !s.session) ? `・区切りの前 ${list.filter((s) => !s.session).length} 名` : ""}</p>` : ""}
+     <ul class="preview">${added.slice(0, 30).map((s) => `<li>${s.session ? `[${esc(s.session)}] ` : ""}${esc(s.id)}　${esc(s.name)}</li>`).join("")}${added.length > 30 ? "<li>…</li>" : ""}</ul>`,
     "追加する");
   if (!ok) return;
+  for (const s of resession) state.students.find((x) => x.id === s.id).session = s.session;
   state.students.push(...added);
+  if (withSessions) {
+    // 時間帯の順に並べ直す。CSVにない登録済みの学生（区切りなし）は最後に回し、最後の時間帯に入れる
+    const listed = new Set(list.map((s) => s.id));
+    const rank = (s) => (!s.session && !listed.has(s.id) ? SESSIONS.length + 1 : sessionRank(s));
+    state.students = state.students.map((s, i) => [s, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([s]) => s);
+    state.students.forEach((s, i) => { if (!listed.has(s.id) && !s.session) adoptSession(i); });
+  }
   save();
   render();
 }
@@ -746,6 +786,7 @@ async function addStudent() {
   });
   if (!r) return;
   state.students.push(r);
+  adoptSession(state.students.length - 1);
   save();
   render();
 }

@@ -144,6 +144,8 @@ main { max-width: 920px; margin: 0 auto; padding: 16px; }
 .row-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-score { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .row-pass { text-align: center; }
+.row.session { display: flex; align-items: baseline; gap: 12px; min-height: 0; padding: 8px 16px; background: var(--caution-bg); font-weight: 700; font-size: 16px; cursor: default; border-left: 5px solid var(--accent); }
+.row.session .cnt { font-weight: 400; font-size: 13px; color: var(--muted); }
 .pass { color: var(--ok); font-weight: 700; }
 .fail { color: var(--fail); font-weight: 700; }
 .empty { text-align: center; padding: 48px 16px; background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; }
