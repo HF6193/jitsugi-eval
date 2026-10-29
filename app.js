@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v37";
+const APP_VERSION = "v38";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -628,7 +628,7 @@ function renderHome() {
     <header class="top">
       <div>
         <div class="title">${esc(examTitle())}</div>
-        <div class="sub"><span class="nw">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／</span>　<span class="nw">確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}　／</span>　<span class="nw">合格 ${passLine()} 点以上</span></div>
+        <div class="sub"><span class="nw">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／</span>　<span class="nw">確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}</span></div>
       </div>
       <button class="btn" data-act="settings">設定</button>
     </header>
