@@ -4,7 +4,7 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v36";
+const APP_VERSION = "v37";
 const BASE_KEY = "jitsugi-eval-v1";
 // 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
 const SLOT_KEY = "jitsugi-eval-slot";
@@ -561,12 +561,13 @@ function nextPending(id) {
   return [...state.students.slice(i+1),...state.students.slice(0,i)].find(s=>!s.absent && !isComplete(s));
 }
 function preparationHTML() {
-  const missing=!state.teacher || !hasChecklist() || !state.students.length;
-  return `<details class="preparation" open><summary>開始前の準備確認${missing ? "（未準備あり）" : ""}</summary>
+  // 見出しには足りないものの名前を出す（オフラインはすぐ下の行に状態が出るので含めない）
+  const missing=[!state.teacher && "評価者", !hasChecklist() && "採点基準", !state.students.length && "名簿"].filter(Boolean);
+  return `<details class="preparation" open><summary>開始前の準備確認：${missing.length ? `<span class="prep-missing">${missing.join("・")}が未設定です</span>` : `<span class="prep-ok">✓ 設定済み</span>`}</summary>
     <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
     ${REVIEW_SLOTS ? `<dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>` : ""}
     <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
-    <dt>担当学生</dt><dd>${state.students.length}名${sessionSummary()}（予定人数と照合してください） <button class="btn small" data-prep-roster>名簿管理へ</button></dd>
+    <dt>担当学生</dt><dd>${state.students.length}名${sessionSummary()}</dd>
     <dt>オフライン</dt><dd data-offline>${offlineBadge()}</dd></dl></details>`;
 }
 function renderHome() {
@@ -617,7 +618,7 @@ function renderHome() {
         <span class="row-id">${esc(s.id)}</span>
         <span class="row-name">${esc(s.name)}</span>
         <span class="row-status">${chip}</span>
-        <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? `${r.score}${st === "final" ? "" : "（暫定）"}` : "—"}</span>
+        <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? r.score : "—"}</span>
         <span class="row-pass">${r && st === "final" ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
       </button>`;
   }
@@ -627,8 +628,7 @@ function renderHome() {
     <header class="top">
       <div>
         <div class="title">${esc(examTitle())}</div>
-        <div class="sub">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／　確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}　／　合格 ${passLine()} 点以上</div>
-        <div class="sub" data-offline>${offlineBadge()}</div>
+        <div class="sub"><span class="nw">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／</span>　<span class="nw">確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}　／</span>　<span class="nw">合格 ${passLine()} 点以上</span></div>
       </div>
       <button class="btn" data-act="settings">設定</button>
     </header>
@@ -654,8 +654,8 @@ function renderHome() {
           <div class="progress-text"><b>${done}</b> / ${n - absentCount} 名 確定${absentCount ? `<span class="muted">（欠席 ${absentCount}）</span>` : ""}</div>
         </div>` : ""}
         ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。${hasSessions() ? "午前・午後の境目をまたいで動かすと、移動先の時間帯に入ります。" : ""}</p>` : ""}
-        <div class="btns filter" role="group" aria-label="学生の表示"><button class="btn small ${homeFilter==="all"?"primary":""}" data-home-filter="all">全員</button><button class="btn small ${homeFilter==="pending"?"primary":""}" data-home-filter="pending">未確定（要確認を含む）</button></div>
-        ${!visible.length ? '<p>未確定・要確認の学生はいません。</p>' : ""}
+        <div class="btns filter" role="group" aria-label="学生の表示"><button class="btn small ${homeFilter==="all"?"primary":""}" data-home-filter="all">全員</button><button class="btn small ${homeFilter==="pending"?"primary":""}" data-home-filter="pending">未確定</button></div>
+        ${!visible.length ? '<p>未確定の学生はいません。</p>' : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
           <div class="row head ${rosterEdit ? "edit" : ""}">
             <span class="row-no">#</span><span class="row-id">学籍番号</span><span class="row-name">氏名</span>
@@ -698,7 +698,6 @@ function renderHome() {
   }));
   app.querySelectorAll("[data-home-filter]").forEach(b=>b.onclick=()=>{homeFilter=b.dataset.homeFilter;rosterEdit=false;renderHome();});
   app.querySelectorAll("[data-prep-settings]").forEach(b=>b.onclick=()=>go("settings"));
-  app.querySelectorAll("[data-prep-roster]").forEach(b=>b.onclick=()=>{const el=app.querySelector("details.roster-tools");if(el){el.open=true;el.scrollIntoView({block:"center"});}});
   const re = app.querySelector("[data-act=roster-edit]");
   if (re) re.onclick = () => { rosterEdit = !rosterEdit; renderHome(); };
   app.querySelector("[data-act=settings]").onclick = () => go("settings");
@@ -972,7 +971,7 @@ function renderEval() {
       </div>
       <div class="score ${r.pass ? "" : "is-fail"}">
         <div class="score-main"><span class="score-v">${r.score}</span><span class="score-u">点</span>
-        <span class="verdict">${r.unmeasured.length ? "判定保留" : (!locked ? "暫定点" : (r.pass ? "合格" : "不合格"))}</span></div>
+        <span class="verdict">${r.unmeasured.length ? "判定保留" : (!locked ? "評価中" : (r.pass ? "合格" : "不合格"))}</span></div>
         <div class="score-sub">減点 ${r.total}　／　合格 ${passLine()}点以上</div>
       </div>
       <div class="head-actions">
