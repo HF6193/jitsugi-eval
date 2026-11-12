@@ -4,18 +4,16 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v38";
+const APP_VERSION = "v39";
 const BASE_KEY = "jitsugi-eval-v1";
-// 保存場所の切り替え：本番のほか、打ち合わせ・練習用に別のチェックリストを試せる場所を2つ用意する
+// 学年の切り替え（v39）：両学年を担当する教員のiPadで、名簿・評価・チェックリスト・教員名を学年ごとに別々に保存する。
+// 1年生は従来の保存場所（main）をそのまま使う。2年生は新しい保存場所（g2）。
+// v33までの検討用（review1・review2）に残っているデータは使わず、消しもしない。
 const SLOT_KEY = "jitsugi-eval-slot";
-const SLOTS = { main: "本番", review1: "修正前版", review2: "修正後版" };
-// チェックリストは1つだけ使う（2026-10-20）。修正前版・修正後版への切り替えは出さず、常に本番を使う。
-// 切り替えを戻すときは true にする（修正前版・修正後版のデータは消さずに残してある）。
-const REVIEW_SLOTS = false;
+const SLOTS = { main: "1年生", g2: "2年生" };
 let slot = readSlot();
 
 function readSlot() {
-  if (!REVIEW_SLOTS) return "main";
   try {
     const v = localStorage.getItem(SLOT_KEY);
     return SLOTS[v] ? v : "main";
@@ -93,9 +91,8 @@ function save() {
   }
 }
 
-function switchSlot(next, keepStudent = false) {
+function switchSlot(next) {
   if (!SLOTS[next] || next === slot) return;
-  const sid = view.name === "eval" ? view.studentId : null;
   if (!loadError && !save()) return;
   slot = next;
   try { localStorage.setItem(SLOT_KEY, slot); } catch {}
@@ -104,34 +101,24 @@ function switchSlot(next, keepStudent = false) {
   observedSignature = dataSignature();
   persistence = { ok: !loadError, at: state.savedAt, error: loadError };
   rosterEdit = false;
-  // 検討用どうしの切り替えでは、同じ学生の評価画面を開いたままにする
-  if (keepStudent && sid && hasChecklist() && state.students.some((x) => x.id === sid)) return go("eval", sid);
   go(state.teacher || state.students.length ? "home" : "settings");
 }
 
-// 別の保存場所の中身（チェックリスト名・人数）を見るだけ
+// 学年ごとの中身（評価者・チェックリストの版・人数）を見るだけ
 function peekSlot(sl) {
   try {
-    const d = JSON.parse(localStorage.getItem(storeKey(sl)) || "null");
-    if (!d) return "未使用";
-    const t = d.checklist?.title || "チェックリスト未読み込み";
-    return `${t}・学生 ${(d.students || []).length} 名`;
+    const d = sl === slot ? state : JSON.parse(localStorage.getItem(storeKey(sl)) || "null");
+    if (!d || (!d.teacher && !(d.students || []).length && !d.checklist)) return "未設定（教員名・チェックリスト・名簿を入れてください）";
+    const n = (d.students || []).length, done = Object.values(d.evals || {}).filter((e) => e.status === "final").length;
+    return `評価者 ${d.teacher || "未設定"}／${d.checklist ? "版 " + d.checklist.version : "チェックリスト未読み込み"}／学生 ${n} 名（確定 ${done} 名）`;
   } catch {
-    return "";
+    return "読み込めません";
   }
 }
 
+// どの学年のデータを開いているかを、画面のいちばん上に常に出す
 function slotBanner() {
-  if (slot === "main") return "";
-  // 打ち合わせ用：修正前と修正後を1タップで行き来する（同じ学生の画面のまま）
-  const other = slot === "review1" ? "review2" : "review1";
-  return `<div class="slot-banner">
-      <b>${esc(SLOTS[slot])}のデータを使用中</b>（${esc(examTitle())}）。本番の評価には使わないでください。
-      <span class="slot-banner-btns">
-        <button class="btn small swap" data-slot-swap="${other}">⇄ ${esc(SLOTS[other])}に切り替え</button>
-        <button class="btn small" data-slot-go="main">本番に戻る</button>
-      </span>
-    </div>`;
+  return `<div class="slot-banner"><span class="grade-mark">${esc(SLOTS[slot])}</span><b>${esc(SLOTS[slot])}の試験</b>として採点します<span class="slot-banner-note">学年の切り替えは「設定」から</span></div>`;
 }
 
 function checklist() {
@@ -536,6 +523,7 @@ async function restoreBackup() {
     payload=JSON.parse(await readTextFile(file));
     if(payload.format!=="jitsugi-eval-backup" || payload.schema!==1 || !SLOTS[payload.slot]) throw new Error("対応するバックアップではありません。");
     validateState(payload.state);
+    if(payload.slot!==slot) throw new Error(`このバックアップは「${SLOTS[payload.slot]}」のものです。設定で「${SLOTS[payload.slot]}」に切り替えてから復元してください。`);
   } catch(e) { return alert("復元していません："+e.message); }
   const d=payload.state;
   if(!(await confirmDialog("バックアップから復元",`<p>作成：${esc(payload.createdAt)}／保存元：${esc(SLOTS[payload.slot])}</p><p>試験：${esc(d.checklist?.title || "未設定")}／版：${esc(d.checklist?.version || "なし")}／学生：${d.students.length}名／教員：${esc(d.teacher)}</p><p><b>現在の「${SLOTS[slot]}」の内容を置き換えます。</b>必要な現データは先にバックアップしてください。他の保存場所は変わりません。</p>`,"この内容で復元する",true))) return;
@@ -565,7 +553,7 @@ function preparationHTML() {
   const missing=[!state.teacher && "評価者", !hasChecklist() && "採点基準", !state.students.length && "名簿"].filter(Boolean);
   return `<details class="preparation" open><summary>開始前の準備確認：${missing.length ? `<span class="prep-missing">${missing.join("・")}が未設定です</span>` : `<span class="prep-ok">✓ 設定済み</span>`}</summary>
     <dl><dt>評価者</dt><dd>${esc(state.teacher)||"未設定"} <button class="btn small" data-prep-settings>設定へ</button></dd>
-    ${REVIEW_SLOTS ? `<dt>保存場所</dt><dd>${esc(SLOTS[slot])}${slot!=="main" ? "（本番では使いません）" : ""}</dd>` : ""}
+    <dt>学年</dt><dd><span class="grade-mark">${esc(SLOTS[slot])}</span></dd>
     <dt>採点基準</dt><dd>${hasChecklist()?esc(examTitle())+" ／ 版 "+esc(checklist().version||"未設定"):"未読み込み"}</dd>
     <dt>担当学生</dt><dd>${state.students.length}名${sessionSummary()}</dd>
     <dt>オフライン</dt><dd data-offline>${offlineBadge()}</dd></dl></details>`;
@@ -966,7 +954,7 @@ function renderEval() {
     <header class="top eval-top">
       <button class="btn" data-act="back">‹ 学生一覧へ</button>
       <div class="who">
-        <div class="who-id">${esc(s.id)}</div>
+        <div class="who-id"><span class="grade-mark small">${esc(SLOTS[slot])}</span> ${esc(s.id)}</div>
         <div class="who-name">${esc(s.name)}</div>
       </div>
       <div class="score ${r.pass ? "" : "is-fail"}">
@@ -975,7 +963,6 @@ function renderEval() {
         <div class="score-sub">減点 ${r.total}　／　合格 ${passLine()}点以上</div>
       </div>
       <div class="head-actions">
-        ${slot !== "main" ? `<button class="btn small swap-hd" data-slot-swap="${slot === "review1" ? "review2" : "review1"}">⇄ ${slot === "review1" ? SLOTS.review2 : SLOTS.review1}</button>` : ""}
         <span class="viewseg" role="group" aria-label="表示">${[["sheet", "標準"], ["detail", "大きく表示"], ["fit", "一覧"]].filter(([k]) => views.includes(k)).map(([k, l]) => `<button class="btn small ${mode === k ? "primary" : ""}" data-view="${k}" aria-pressed="${mode === k}">${l}</button>`).join("")}</span>
         ${fit ? `<button class="btn small" data-act="memo">メモ${ev.memo ? " ●" : ""}</button>` : ""}
         ${locked
@@ -1041,7 +1028,6 @@ function renderEval() {
   on("next", () => go("eval", next.id));
   on("finalize", () => finalize(s, ev));
   on("cancel-revision", () => cancelRevision(s,ev));
-  app.querySelectorAll(".head-actions [data-slot-swap]").forEach((b) => (b.onclick = () => switchSlot(b.dataset.slotSwap, true)));
   app.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => {
     state.viewMode = b.dataset.view;
     save();
@@ -1193,9 +1179,8 @@ async function exportResults() {
       }),
     ];
   });
-  // 検討用の結果は「修正前版_…」「修正後版_…」という名前にして、本番の集約（評価結果_*.csv）に混ざらないようにする
-  const prefix = slot === "main" ? "評価結果" : `${SLOTS[slot]}_評価結果`;
-  const name = `${prefix}_${examTitle()}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
+  // ファイル名に学年を入れる（別の学年の集約フォルダに入れてしまっても気づけるように）
+  const name = `評価結果_${examTitle()}_${SLOTS[slot]}_${state.teacher}_${stamp()}.csv`.replace(/[\\/:*?"<>|\s]/g, "");
   const result = await shareFile(name, toCSV([header, ...rows]), "text/csv");
   if (result?.status === "cancelled") return;
   if (state === exportState && slot === exportSlot && result) {
@@ -1239,16 +1224,16 @@ function renderSettings() {
         <p class="muted">試験名・合格点はチェックリストCSVで決まります。評価データがある間は差し替えできません。</p>
       </section>
 
-      ${REVIEW_SLOTS ? `<section class="card">
-        <details open><summary>練習・検討用データ</summary>
+      <section class="card">
+        <h3>学年の切り替え</h3>
         <div class="slots">
           ${Object.entries(SLOTS).map(([k, label]) => `
             <button class="slot-btn ${k === slot ? "sel" : ""}" data-slot-go="${k}" ${k === slot ? "disabled" : ""}>
-              <b>${label}</b>${k === slot ? "（使用中）" : ""}<span>${esc(k === slot ? `${state.checklist?.title || "チェックリスト未読み込み"}・学生 ${state.students.length} 名` : peekSlot(k))}</span>
+              <b><span class="grade-mark" data-g="${k}">${label}</span>${k === slot ? "　いま開いています" : "　に切り替える"}</b><span>${esc(peekSlot(k))}</span>
             </button>`).join("")}
         </div>
-        <p class="muted">「修正前版」「修正後版」には、本番とは別にチェックリスト・名簿・評価を保存できます。それぞれに修正前・修正後のチェックリストを入れて、切り替えて試せます。<b>試験当日は必ず「本番」で評価してください。</b></p></details>
-      </section>` : ""}
+        <p class="muted">名簿・採点・チェックリスト・教員名は、学年ごとに別々に保存されます。切り替えても、もう一方の学年のデータは消えません。<b>試験の前に、画面上部の学年が合っているか確認してください。</b></p>
+      </section>
 
       <section class="card">
         <h3>オフライン動作</h3><p class="muted">アプリ ${APP_VERSION}</p>
@@ -1259,10 +1244,8 @@ function renderSettings() {
 
       <section class="card">
         <h3>データの消去</h3>
-        <p class="muted">${slot === "main"
-          ? "試験後、結果CSVを書き出して集約が済んだら、この端末から成績データを消去してください。"
-          : `「${SLOTS[slot]}」のデータだけを消去します。本番のデータは消えません。`}</p>
-        <button class="btn danger" data-act="wipe">${slot === "main" ? "本番データを消去" : `${SLOTS[slot]}のデータを消去`}</button>
+        <p class="muted">いま開いている「${SLOTS[slot]}」のデータだけを消去します。もう一方の学年のデータは消えません。試験後、結果CSVを書き出して集約が済んでから消去してください。</p>
+        <button class="btn danger" data-act="wipe">${SLOTS[slot]}のデータを消去</button>
       </section>
 
       <section class="card"><h3>バックアップと復元</h3>
@@ -1285,7 +1268,11 @@ function renderSettings() {
   on("backup", exportBackup);
   on("restore", restoreBackup);
   on("offline-check", () => checkOffline());
-  app.querySelectorAll(".slot-btn[data-slot-go]").forEach((b) => b.addEventListener("click", () => switchSlot(b.dataset.slotGo)));
+  app.querySelectorAll(".slot-btn[data-slot-go]").forEach((b) => b.addEventListener("click", async () => {
+    const next = b.dataset.slotGo;
+    if (!(await confirmDialog(`${SLOTS[next]}に切り替え`, `<p><b>${SLOTS[next]}</b>の名簿と採点に切り替えます。</p><p>${SLOTS[slot]}のデータは消えずに残り、いつでも戻せます。</p><p class="muted">${esc(SLOTS[next])}：${esc(peekSlot(next))}</p>`, `${SLOTS[next]}に切り替える`))) return;
+    switchSlot(next);
+  }));
   on("cl-reset", async () => {
     if (hasEvalData()) return alert("評価データがあるため差し替えできません。先に結果を書き出し、データを消去してください。");
     if (!(await confirmDialog("チェックリストの解除", "<p>読み込んだチェックリストを解除します。</p>"))) return;
@@ -1294,7 +1281,7 @@ function renderSettings() {
     render();
   });
   on("wipe", async () => {
-    if (!(await confirmDialog(`${SLOTS[slot]}のデータを消去`, `<p>「${SLOTS[slot]}」の名簿・評価結果・設定だけを消去します。他の保存場所は残ります。<b>元に戻せません。</b><br>結果CSVの受領・集約、必要なバックアップの保存は済んでいますか？</p>`, "消去に進む", true))) return;
+    if (!(await confirmDialog(`${SLOTS[slot]}のデータを消去`, `<p>「${SLOTS[slot]}」の名簿・評価結果・設定だけを消去します。もう一方の学年のデータは残ります。<b>元に戻せません。</b><br>結果CSVの受領・集約、必要なバックアップの保存は済んでいますか？</p>`, "消去に進む", true))) return;
     if (!(await confirmDialog("最終確認", "<p>本当に消去しますか？</p>", "消去する", true))) return;
     try { localStorage.removeItem(storeKey()); } catch (e) { return alert("消去できませんでした：" + e.message); }
     state = blankState(); loadError = "";
@@ -1439,7 +1426,7 @@ function render() {
   else renderHome();
 }
 
-// 画面を描くたびに、検討用データの帯を先頭に付ける
+// 画面を描くたびに、学年の帯を先頭に付ける（採点画面は見出しの印と色の線で示す）
 function decorate() {
   document.body.dataset.slot = slot;
   if (!app.querySelector("[data-save-status]")) {
@@ -1447,13 +1434,7 @@ function decorate() {
     host.insertAdjacentHTML(view.name === "eval" ? "beforeend" : "afterbegin", `<div class="save-status" data-save-status aria-live="polite">${saveStatusHTML()}</div>`);
     document.querySelectorAll("[data-retry-save]").forEach(el=>{el.onclick=()=>{save();render();};});
   }
-  if (slot !== "main" && !app.querySelector(".slot-banner")) {
-    app.insertAdjacentHTML("afterbegin", slotBanner());
-    const banner = app.querySelector(".slot-banner");
-    banner.querySelector("[data-slot-go]").onclick = () => switchSlot("main");
-    banner.querySelector("[data-slot-swap]").onclick = (e) => switchSlot(e.currentTarget.dataset.slotSwap, true);
-    fitToScreen();
-  }
+  if (view.name !== "eval" && !app.querySelector(".slot-banner")) app.insertAdjacentHTML("afterbegin", slotBanner());
 }
 new MutationObserver(decorate).observe(app, { childList: true });
 

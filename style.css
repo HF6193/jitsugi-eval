@@ -551,24 +551,28 @@ h3.cat[data-c] {
   .who-name { font-size: 19px; }
 }
 
-/* 検討用データの表示（本番と取り違えないように） */
+/* 学年の表示（1年生＝青、2年生＝橙。取り違えないように色でも分ける） */
+body[data-slot="main"] { --grade: #1d4ed8; }
+body[data-slot="g2"] { --grade: #c2410c; }
 .slot-banner {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
-  padding: 10px 16px; background: #c2410c; color: #fff; font-size: 15px;
+  padding: 8px 16px; background: var(--grade); color: #fff; font-size: 16px;
 }
-.slot-banner-btns { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
-.slot-banner .btn { background: #fff; color: #c2410c; border-color: #fff; font-weight: 700; }
-.slot-banner .btn.swap { background: #fff7ed; border: 2px solid #fff; font-size: 16px; }
-body:not([data-slot="main"]) .top { border-top: 4px solid #c2410c; }
+.slot-banner-note { margin-left: auto; font-size: 13px; opacity: .9; }
+.grade-mark { display: inline-block; padding: 1px 10px; border-radius: 999px; background: var(--grade); color: #fff; font-weight: 800; font-size: 15px; }
+.slot-banner .grade-mark { background: #fff; color: var(--grade); }
+.grade-mark.small { font-size: 12px; padding: 0 8px; }
+.grade-mark[data-g="main"] { background: #1d4ed8; }
+.grade-mark[data-g="g2"] { background: #c2410c; }
+body[data-slot] .top { border-top: 4px solid var(--grade); }
 .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 8px; }
 .slot-btn {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
-  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer;
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text, inherit); cursor: pointer;
 }
-.slot-btn span { font-size: 13px; color: var(--muted); }
-.slot-btn.sel { border: 2px solid var(--accent); background: var(--c0-bg); cursor: default; opacity: 1; }
-.slot-btn[data-slot-go="review1"]:not(.sel), .slot-btn[data-slot-go="review2"]:not(.sel) { border-style: dashed; }
-.btn.swap-hd { background: #fff7ed; border: 2px solid #c2410c; color: #c2410c; font-weight: 800; }
+.slot-btn b { font-size: 17px; }
+.slot-btn > span { font-size: 13px; color: var(--muted); }
+.slot-btn.sel { border: 2px solid var(--grade); cursor: default; opacity: 1; }
 
 /* ===== 1画面表示（全項目を1画面に収める。文字の大きさは --fs を app.js が調整） ===== */
 .viewseg { display: inline-flex; }
