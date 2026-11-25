@@ -645,3 +645,11 @@ main.eval.is-fit { max-width: none; padding: 6px 8px 4px; }
 /* 折りたたみ欄は使わず、すべて最初から表示する（見出しは押しても閉じない） */
 details > summary { list-style: none; pointer-events: none; cursor: default; }
 details > summary::-webkit-details-marker { display: none; }
+
+/* v40：ブース移動 */
+.form label.check-line{display:flex;align-items:center;gap:10px;color:var(--text,#1c2430);font-size:16px;margin:4px 0 12px}
+.form label.check-line input{width:22px;height:22px;margin:0}
+.from-box{border-left:4px solid #3b78c2;padding:4px 0 2px 12px;margin:0 0 8px}
+.from-box .note{margin:0;font-size:13px}
+.chip.from{background:#e6effa;color:#2b5d9c;font-size:12px;padding:1px 8px;vertical-align:2px;white-space:nowrap;text-decoration:none;display:inline-block}
+.row-status .chip{white-space:nowrap}

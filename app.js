@@ -4,8 +4,10 @@
 // - データはこの端末の localStorage にのみ保存する（外部通信なし。index.html の CSP で禁止済み）
 // - 結果はCSVで書き出し、AirDrop等で集約する
 
-const APP_VERSION = "v39";
+const APP_VERSION = "v40";
 const BASE_KEY = "jitsugi-eval-v1";
+// ブース移動・未評価に戻す（v40）：「学生を追加」で他のブースから移ってきた学生に元の教員名を付ける。元のiPadでは「他ブースへ」で人数から外す。書き出しの「移動元の教員」列で集約ツールが自動採用する。
+// 評価中（確定前）の入力は「入力を取り消して未評価に戻す」で消せる。
 // 学年の切り替え（v39）：両学年を担当する教員のiPadで、名簿・評価・チェックリスト・教員名を学年ごとに別々に保存する。
 // 1年生は従来の保存場所（main）をそのまま使う。2年生は新しい保存場所（g2）。
 // v33までの検討用（review1・review2）に残っているデータは使わず、消しもしない。
@@ -38,7 +40,7 @@ function blankState() {
   return {
     teacher: "",
     checklist: null, // null のときは checklist.js の既定を使う
-    students: [], // { id, name, session?: "午前"|"午後", absent? }
+    students: [], // { id, name, session?: "午前"|"午後", absent?, moved?（他ブースへ）, from?（移動元の教員名） }
     evals: {}, // studentId -> { checked: {itemId: true}, measures: {itemId: cm}, memo, status, updatedAt, finalizedAt, revised }
   };
 }
@@ -49,7 +51,7 @@ let state = load();
 let observedSignature = dataSignature();
 let view = { name: "home", studentId: null };
 let homeFilter = "all";
-let rosterEdit = false; // 一覧の「並べ替え・欠席」モード
+let rosterEdit = false; // 一覧の「並べ替え・欠席・移動」モード
 
 function load() {
   try {
@@ -447,7 +449,7 @@ function validateState(d) {
   if (d.checklist) validateChecklist(d.checklist);
   const ids = new Set();
   for (const st of d.students) {
-    if (!plainObject(st) || !validId(st.id) || typeof st.name !== "string" || ids.has(st.id) || (st.absent !== undefined && typeof st.absent !== "boolean") || (st.session !== undefined && !SESSIONS.includes(st.session))) throw new Error("名簿の学籍番号・氏名・重複を確認してください。");
+    if (!plainObject(st) || !validId(st.id) || typeof st.name !== "string" || ids.has(st.id) || (st.absent !== undefined && typeof st.absent !== "boolean") || (st.moved !== undefined && typeof st.moved !== "boolean") || (st.from !== undefined && (typeof st.from !== "string" || !st.from.trim() || st.from.length > 40)) || (st.session !== undefined && !SESSIONS.includes(st.session))) throw new Error("名簿の学籍番号・氏名・重複を確認してください。");
     ids.add(st.id);
   }
   const items = new Map(withIds(d.checklist || {groups:[]}).groups.flatMap(g => g.items.map(it => [it.id,it])));
@@ -539,14 +541,16 @@ async function restoreBackup() {
 
 // ---------- 画面: ホーム ----------
 
+// 欠席・他ブースへ：人数と未確定の対象から外す
+function isOut(s) { return !!(s.absent || s.moved); }
 function needsReview(s) {
   const ev=getEvalIfAny(s.id);
-  return !s.absent && ev?.status === "final" && scoreOf(ev).unmeasured.length > 0;
+  return !isOut(s) && ev?.status === "final" && scoreOf(ev).unmeasured.length > 0;
 }
-function isComplete(s) { return !s.absent && getEvalIfAny(s.id)?.status === "final" && !needsReview(s); }
+function isComplete(s) { return !isOut(s) && getEvalIfAny(s.id)?.status === "final" && !needsReview(s); }
 function nextPending(id) {
   const i=state.students.findIndex(s=>s.id===id);
-  return [...state.students.slice(i+1),...state.students.slice(0,i)].find(s=>!s.absent && !isComplete(s));
+  return [...state.students.slice(i+1),...state.students.slice(0,i)].find(s=>!isOut(s) && !isComplete(s));
 }
 function preparationHTML() {
   // 見出しには足りないものの名前を出す（オフラインはすぐ下の行に状態が出るので含めない）
@@ -569,42 +573,48 @@ function renderHome() {
 
   const n = state.students.length;
   const absentCount = state.students.filter((s) => s.absent).length;
-  const visible = state.students.map((s,i)=>({s,i})).filter(({s})=>rosterEdit || homeFilter==="all" || (!s.absent && !isComplete(s)));
+  const movedCount = state.students.filter((s) => s.moved && !s.absent).length;
+  const offCount = absentCount + movedCount;
+  const offText = (a, m) => [a && `欠席 ${a}`, m && `他ブースへ ${m}`].filter(Boolean).join("・");
+  const visible = state.students.map((s,i)=>({s,i})).filter(({s})=>rosterEdit || homeFilter==="all" || (!isOut(s) && !isComplete(s)));
   if(homeFilter==="pending" && !rosterEdit) visible.sort((a,b)=>sessionRank(a.s)-sessionRank(b.s) || (Number(needsReview(b.s))*2+Number(getEvalIfAny(b.s.id)?.status==="draft"))-(Number(needsReview(a.s))*2+Number(getEvalIfAny(a.s.id)?.status==="draft")) || a.i-b.i);
   const sessionHead = (s, prev) => {
     if (!s.session || s.session === prev?.session) return "";
     const g = state.students.filter((x) => x.session === s.session);
-    return `<div class="row session"><span>${esc(s.session)}</span><span class="cnt">確定 ${g.filter(isComplete).length} / ${g.filter((x) => !x.absent).length} 名${g.some((x) => x.absent) ? `（欠席 ${g.filter((x) => x.absent).length}）` : ""}</span></div>`;
+    return `<div class="row session"><span>${esc(s.session)}</span><span class="cnt">確定 ${g.filter(isComplete).length} / ${g.filter((x) => !isOut(x)).length} 名${g.some(isOut) ? `（${offText(g.filter((x) => x.absent).length, g.filter((x) => x.moved && !x.absent).length)}）` : ""}</span></div>`;
   };
   const rows = visible.map(({s, i}, k) => sessionHead(s, visible[k - 1]?.s) + rowHTML(s, i)).join("");
   function rowHTML(s, i) {
     const ev = getEvalIfAny(s.id);
     const st = needsReview(s) ? "review" : (ev?.status || "none");
     const r = !s.absent && ev && st !== "none" && st !== "review" ? scoreOf(ev) : null;
+    const fromChip = s.from ? ` <span class="chip from">${esc(s.from)}ブースから</span>` : "";
     const chip = s.absent
       ? `<span class="chip absent">欠席</span>`
+      : s.moved ? `<span class="chip absent">他ブースへ</span>`
       : { none: `<span class="chip">未評価</span>`, draft: `<span class="chip warn">評価中</span>`, review: `<span class="chip warn">要確認・未測定</span>`, final: `<span class="chip ok">確定</span>` }[st];
     if (rosterEdit) {
       const id = esc(s.id);
       return `
-      <div class="row edit ${s.absent ? "is-absent" : ""}" data-st="${s.absent ? "absent" : st}">
+      <div class="row edit ${isOut(s) ? "is-absent" : ""}" data-st="${isOut(s) ? "absent" : st}">
         <span class="row-no">${i + 1}</span>
         <span class="row-id">${id}</span>
-        <span class="row-name">${esc(s.name)}</span>
+        <span class="row-name">${esc(s.name)}${fromChip}</span>
         <span class="row-status">${chip}</span>
         <span class="row-ctl">
           <button class="btn small" data-move="up" data-sid="${id}" ${i === 0 ? "disabled" : ""} aria-label="上へ">↑</button>
           <button class="btn small" data-move="down" data-sid="${id}" ${i === n - 1 ? "disabled" : ""} aria-label="下へ">↓</button>
           <button class="btn small" data-move="last" data-sid="${id}" ${i === n - 1 ? "disabled" : ""}>最後へ</button>
           <button class="btn small" data-absent="${id}">${s.absent ? "欠席を取消" : "欠席"}</button>
+          <button class="btn small" data-moveout="${id}">${s.moved ? "他ブースへ を取消" : "他ブースへ"}</button>
         </span>
       </div>`;
     }
     return `
-      <button class="row ${s.absent ? "is-absent" : ""}" data-st="${s.absent ? "absent" : st}" data-open="${esc(s.id)}">
+      <button class="row ${isOut(s) ? "is-absent" : ""}" data-st="${isOut(s) ? "absent" : st}" data-open="${esc(s.id)}">
         <span class="row-no">${i + 1}</span>
         <span class="row-id">${esc(s.id)}</span>
-        <span class="row-name">${esc(s.name)}</span>
+        <span class="row-name">${esc(s.name)}${fromChip}</span>
         <span class="row-status">${chip}</span>
         <span class="row-score ${r ? (r.pass ? "pass" : "fail") : ""}">${r ? r.score : "—"}</span>
         <span class="row-pass">${r && st === "final" ? (r.pass ? `<span class="pass">合</span>` : `<span class="fail">否</span>`) : ""}</span>
@@ -616,7 +626,7 @@ function renderHome() {
     <header class="top">
       <div>
         <div class="title">${esc(examTitle())}</div>
-        <div class="sub"><span class="nw">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／</span>　<span class="nw">確定 ${done} / ${n - absentCount} 名${absentCount ? `（欠席 ${absentCount} 名）` : ""}</span></div>
+        <div class="sub"><span class="nw">評価者：${esc(state.teacher) || "<span class='muted'>未設定</span>"}　／</span>　<span class="nw">確定 ${done} / ${n - offCount} 名${offCount ? `（${offText(absentCount, movedCount)} 名）` : ""}</span></div>
       </div>
       <button class="btn" data-act="settings">設定</button>
     </header>
@@ -632,16 +642,16 @@ function renderHome() {
         <details class="roster-tools" open><summary>名簿管理</summary><div class="btns">
         <button class="btn" data-act="import-roster">名簿CSVを読み込む</button>
         <button class="btn" data-act="add-student">学生を追加</button>
-        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席を終える" : "並べ替え・欠席"}</button>` : ""}</div></details>
+        ${n ? `<button class="btn ${rosterEdit ? "primary" : ""}" data-act="roster-edit">${rosterEdit ? "並べ替え・欠席・移動を終える" : "並べ替え・欠席・移動"}</button>` : ""}</div></details>
         <span class="spacer"></span>
         <button class="btn primary" data-act="export">結果をCSVで書き出す</button>
       </div>
       ${state.students.length ? `
         ${n ? `<div class="progress" aria-label="評価の進み具合">
-          <div class="progress-bar"><span style="width:${n - absentCount ? (done / (n - absentCount)) * 100 : 0}%"></span></div>
-          <div class="progress-text"><b>${done}</b> / ${n - absentCount} 名 確定${absentCount ? `<span class="muted">（欠席 ${absentCount}）</span>` : ""}</div>
+          <div class="progress-bar"><span style="width:${n - offCount ? (done / (n - offCount)) * 100 : 0}%"></span></div>
+          <div class="progress-text"><b>${done}</b> / ${n - offCount} 名 確定${offCount ? `<span class="muted">（${offText(absentCount, movedCount)}）</span>` : ""}</div>
         </div>` : ""}
-        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」にしてください（欠席は取り消せます）。${hasSessions() ? "午前・午後の境目をまたいで動かすと、移動先の時間帯に入ります。" : ""}</p>` : ""}
+        ${rosterEdit ? `<p class="note">↑↓で順番を入れ替えます。遅れてきた学生は「最後へ」、受験しない学生は「欠席」、他の先生のブースへ移った学生は「他ブースへ」にしてください（どちらも人数から外れ、取り消せます）。${hasSessions() ? "午前・午後の境目をまたいで動かすと、移動先の時間帯に入ります。" : ""}</p>` : ""}
         <div class="btns filter" role="group" aria-label="学生の表示"><button class="btn small ${homeFilter==="all"?"primary":""}" data-home-filter="all">全員</button><button class="btn small ${homeFilter==="pending"?"primary":""}" data-home-filter="pending">未確定</button></div>
         ${!visible.length ? '<p>未確定の学生はいません。</p>' : ""}
         <div class="list ${rosterEdit ? "editing" : ""}">
@@ -665,6 +675,10 @@ function renderHome() {
       if (!(await confirmDialog("欠席の学生", `<p>${esc(st.name)} は欠席になっています。欠席を取り消して評価しますか？</p>`, "取り消して評価する"))) return;
       st.absent = false;
       save();
+    } else if (st?.moved) {
+      if (!(await confirmDialog("他ブースへ移った学生", `<p>${esc(st.name)} は「他ブースへ」になっています。取り消して、このiPadで評価しますか？</p>`, "取り消して評価する"))) return;
+      st.moved = false;
+      save();
     }
     go("eval", b.dataset.open);
   }));
@@ -682,7 +696,13 @@ function renderHome() {
     const s = state.students[at(b.dataset.absent)];
     if (!s.absent && getEvalIfAny(s.id)?.status && getEvalIfAny(s.id).status !== "none" &&
         !(await confirmDialog("欠席に変更", `<p>${esc(s.id)} ${esc(s.name)} の評価を集計対象から外します。入力内容は保持され、欠席を取り消すと戻ります。</p>`, "欠席にする"))) return;
-    keepScroll(() => { s.absent = !s.absent; });
+    keepScroll(() => { s.absent = !s.absent; if (s.absent) s.moved = false; });
+  }));
+  app.querySelectorAll("[data-moveout]").forEach((b) => b.addEventListener("click", async () => {
+    const s = state.students[at(b.dataset.moveout)];
+    if (!s.moved && getEvalIfAny(s.id)?.status && getEvalIfAny(s.id).status !== "none" &&
+        !(await confirmDialog("他ブースへ", `<p>${esc(s.id)} ${esc(s.name)} にはこのiPadで入力した評価があります。他ブースへにすると、この評価は書き出されません（入力内容は残り、取り消すと戻ります）。</p>`, "他ブースへにする"))) return;
+    keepScroll(() => { s.moved = !s.moved; if (s.moved) s.absent = false; });
   }));
   app.querySelectorAll("[data-home-filter]").forEach(b=>b.onclick=()=>{homeFilter=b.dataset.homeFilter;rosterEdit=false;renderHome();});
   app.querySelectorAll("[data-prep-settings]").forEach(b=>b.onclick=()=>go("settings"));
@@ -754,11 +774,20 @@ async function importRoster() {
 }
 
 async function addStudent() {
+  setTimeout(() => {
+    const cb = dlg.querySelector("#f-moved");
+    if (cb) cb.onchange = () => { dlg.querySelector("#f-from-box").hidden = !cb.checked; if (cb.checked) dlg.querySelector("#f-from").focus(); };
+  });
   const r = await openDialog(`
     <h2>学生を追加</h2>
     <div class="dlg-body form">
       <label>学籍番号<input id="f-id" inputmode="numeric" autocomplete="off"></label>
       <label>氏名<input id="f-name" autocomplete="off"></label>
+      <label class="check-line"><input type="checkbox" id="f-moved"> 他のブースから移ってきた学生</label>
+      <div id="f-from-box" class="from-box" hidden>
+        <label>元の教員名<input id="f-from" autocomplete="off"></label>
+        <p class="note">元のブースの教員名を入れてください。集約のときに使います。</p>
+      </div>
     </div>
     <div class="dlg-actions">
       <button class="btn" data-dlg="cancel">キャンセル</button>
@@ -769,7 +798,11 @@ async function addStudent() {
     if (!validId(id)) { alert("学籍番号を確認してください。"); dlg.querySelector("#f-id").focus(); return false; }
     if (!name) { alert("氏名を入力してください。"); return false; }
     if (state.students.some((s) => s.id === id)) { alert("その学籍番号は登録済みです。"); return false; }
-    return { id, name };
+    const moved = dlg.querySelector("#f-moved").checked;
+    const from = dlg.querySelector("#f-from").value.trim().replace(/\s+/g, " ");
+    if (moved && !from) { alert("元の教員名を入れてください。"); dlg.querySelector("#f-from").focus(); return false; }
+    if (from.length > 40) { alert("元の教員名が長すぎます。"); return false; }
+    return moved ? { id, name, from } : { id, name };
   });
   if (!r) return;
   state.students.push(r);
@@ -977,6 +1010,7 @@ function renderEval() {
       ${fit ? "" : `<p class="note">該当する減点項目・注意項目を選んでください。できている項目にはチェックしません。</p>`}
       ${groups}
       ${ev.revisionBase && !locked ? `<button class="btn" data-act="cancel-revision">修正を取り消して確定状態に戻す</button>` : ""}
+      ${canReset(ev) ? `<button class="btn" data-act="reset-eval">入力を取り消して未評価に戻す</button>` : ""}
       ${fit ? "" : historyHTML(ev)}
       ${fit ? "" : `
       <h3 class="cat">メモ</h3>
@@ -1028,6 +1062,7 @@ function renderEval() {
   on("next", () => go("eval", next.id));
   on("finalize", () => finalize(s, ev));
   on("cancel-revision", () => cancelRevision(s,ev));
+  on("reset-eval", () => resetEval(s, ev));
   app.querySelectorAll("[data-view]").forEach((b) => (b.onclick = () => {
     state.viewMode = b.dataset.view;
     save();
@@ -1081,6 +1116,16 @@ window.addEventListener("resize", () => {
   fitTimer = setTimeout(() => { if (view.name === "eval") fitToScreen(); }, 150);
 });
 
+// 間違えて触って「評価中」になった学生を未評価に戻す（一度も確定していない評価だけ）
+function canReset(ev) { return ev.status === "draft" && !ev.revisionBase && !(ev.history || []).length; }
+async function resetEval(s, ev) {
+  if (!canReset(ev)) return;
+  if (!(await confirmDialog("未評価に戻す", `<p>${esc(s.id)} ${esc(s.name)} の入力（チェック・測定値・メモ）をすべて消して、未評価に戻します。元には戻せません。</p>`, "未評価に戻す", true))) return;
+  const prev = state.evals[s.id];
+  delete state.evals[s.id];
+  if (!save()) { state.evals[s.id] = prev; observedSignature = dataSignature(); return renderEval(); }
+  go("home");
+}
 async function cancelRevision(s, ev) {
   if(!ev.revisionBase) return;
   if(!(await confirmDialog("修正を取り消す","<p>修正中の内容を破棄し、修正前の確定状態に戻します。取消の記録は残ります。</p>","確定状態に戻す")))return;
@@ -1141,7 +1186,7 @@ async function exportResults() {
     alert("先に「設定」で評価者（教員名）を入力してください。");
     return go("settings");
   }
-  const notFinal = state.students.filter((s) => !s.absent && getEvalIfAny(s.id)?.status !== "final");
+  const notFinal = state.students.filter((s) => !isOut(s) && getEvalIfAny(s.id)?.status !== "final");
   if (notFinal.length) {
     const ok = await confirmDialog("未確定の学生がいます",
       `<p>次の ${notFinal.length} 名は確定していません。このまま書き出しますか？（状態列に「未評価」または「未確定」と記録されます）</p>
@@ -1151,7 +1196,7 @@ async function exportResults() {
   if (loadError || (!persistence.ok && !save())) return alert("未保存のため通常のCSV書き出しを止めました。設定からバックアップを保存してください。");
   if (!save()) return;
   const exportState = state, exportSlot = slot, exportRevision = state.dataRevision || 0;
-  const missingFinal = state.students.filter(s => !s.absent && getEvalIfAny(s.id)?.status === "final" && scoreOf(getEvalIfAny(s.id)).unmeasured.length);
+  const missingFinal = state.students.filter(s => !isOut(s) && getEvalIfAny(s.id)?.status === "final" && scoreOf(getEvalIfAny(s.id)).unmeasured.length);
   if (missingFinal.length) return alert("旧版で未測定のまま確定された評価があります。修正して測定値を入力してください。\n" + missingFinal.map(s=>s.id+" "+s.name).join("\n"));
   const cl = checklist();
   const items = cl.groups.flatMap((g) => g.items.map((it) => ({ g, it })));
@@ -1159,16 +1204,17 @@ async function exportResults() {
     "試験名", "チェックリスト版", "評価者", "学籍番号", "氏名", "状態", "得点", "合否", "減点合計", "確定日時", "修正回数", "減点項目", "注意項目", "メモ", "修正履歴", "合格点",
     ...cl.groups.map((g) => `【減点】${g.name}`),
     ...items.map(({ g, it }) => `${it.id} ${g.name}：${it.label}${isChoice(it) ? "（択一）" : isMeasure(it) ? "（cm・5は5.0以上）" : ""}`),
+    "移動元の教員", // v40：他のブースから移ってきた学生だけ、元の教員名が入る
   ];
   const rows = state.students.map((s) => {
-    // 欠席の学生は、途中まで入力があっても結果を出さない
-    const ev = s.absent ? null : getEvalIfAny(s.id);
-    const st = s.absent ? "absent" : ev?.status || "none";
+    // 欠席・他ブースへの学生は、途中まで入力があっても結果を出さない
+    const ev = isOut(s) ? null : getEvalIfAny(s.id);
+    const st = s.absent ? "absent" : s.moved ? "moved" : ev?.status || "none";
     const r = scoreOf(ev);
-    const evaluated = st !== "none" && st !== "absent";
+    const evaluated = st !== "none" && st !== "absent" && st !== "moved";
     return [
       examTitle(), cl.version || "", ev?.teacher || state.teacher, s.id, s.name,
-      { none: "未評価", draft: "未確定", final: "確定", absent: "欠席" }[st],
+      { none: "未評価", draft: "未確定", final: "確定", absent: "欠席", moved: "他ブースへ" }[st],
       evaluated ? r.score : "", st === "final" ? (r.unmeasured.length ? "保留" : (r.pass ? "合" : "否")) : "", evaluated ? r.total : "",
       fmtDate(ev?.finalizedAt), ev?.revised || 0,
       r.deductions.join(" / "), r.cautions.join(" / "), ev?.memo || "", JSON.stringify(ev?.history || []), passLine(),
@@ -1177,6 +1223,7 @@ async function exportResults() {
         if (isMeasure(it)) return ev?.measures?.[it.id] ?? "";
         return ev?.checked[it.id] ? (isCaution(it) ? "注意" : it.points) : "";
       }),
+      s.from || "",
     ];
   });
   // ファイル名に学年を入れる（別の学年の集約フォルダに入れてしまっても気づけるように）
